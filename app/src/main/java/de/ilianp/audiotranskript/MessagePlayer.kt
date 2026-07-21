@@ -127,7 +127,7 @@ class MessagePlayerController(
         }
     }
 
-    fun setSpeed(newSpeed: PlaybackSpeed) {
+    fun changeSpeed(newSpeed: PlaybackSpeed) {
         speed = newSpeed
         val mp = player ?: return
         if (isPlaying) applySpeed(mp)
@@ -276,7 +276,7 @@ fun MessagePlayerCard(uri: Uri, modifier: Modifier = Modifier) {
                         FilterChip(
                             selected = controller.speed == option,
                             onClick = {
-                                controller.setSpeed(option)
+                                controller.changeSpeed(option)
                                 settings.playbackSpeedFactor = option.factor
                             },
                             label = { Text(option.label) },
