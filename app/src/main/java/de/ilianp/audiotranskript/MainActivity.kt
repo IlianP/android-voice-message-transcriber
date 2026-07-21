@@ -6,7 +6,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,6 +47,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -82,24 +88,31 @@ fun AppScreen(sharedUri: Uri?) {
     var langCode by remember { mutableStateOf(settings.languageCode) }
     var savedHint by remember { mutableStateOf(false) }
 
+    var pickedUri by remember { mutableStateOf<Uri?>(null) }
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var elapsedSeconds by remember { mutableIntStateOf(0) }
+    var job by remember { mutableStateOf<Job?>(null) }
     var debugLog by remember { mutableStateOf(DebugLog.get(context)) }
 
     val hasKey = groqKey.isNotBlank() || falKey.isNotBlank()
+    val activeUri = sharedUri ?: pickedUri
 
-    fun startTranscription() {
-        if (sharedUri == null || running) return
+    fun startTranscription(uri: Uri) {
+        if (running) return
         running = true
         result = null
         error = null
-        scope.launch {
+        elapsedSeconds = 0
+        job = scope.launch {
             try {
-                result = WizperClient.transcribe(context, sharedUri, groqKey, falKey, langCode) { url ->
+                result = WizperClient.transcribe(context, uri, groqKey, falKey, langCode) { url ->
                     DebugLog.addFalUpload(context, url)
                     debugLog = DebugLog.get(context)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 error = e.message ?: "Unbekannter Fehler"
             } finally {
@@ -108,8 +121,26 @@ fun AppScreen(sharedUri: Uri?) {
         }
     }
 
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            pickedUri = uri
+            result = null
+            error = null
+            if (hasKey) startTranscription(uri)
+        }
+    }
+
     LaunchedEffect(Unit) {
-        if (sharedUri != null && hasKey) startTranscription()
+        if (sharedUri != null && hasKey) startTranscription(sharedUri)
+    }
+
+    LaunchedEffect(running) {
+        if (running) {
+            while (true) {
+                delay(1000)
+                elapsedSeconds += 1
+            }
+        }
     }
 
     Column(
@@ -162,23 +193,32 @@ fun AppScreen(sharedUri: Uri?) {
             Text("Gespeichert.", style = MaterialTheme.typography.bodySmall)
         }
 
-        if (sharedUri != null) {
+        OutlinedButton(
+            onClick = { picker.launch(arrayOf("audio/*")) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Audiodatei auswählen")
+        }
+
+        if (activeUri != null) {
             Spacer(Modifier.height(8.dp))
             TranscriptionPanel(
                 running = running,
                 result = result,
                 error = error,
                 hasKey = hasKey,
-                onStart = { startTranscription() },
+                elapsedSeconds = elapsedSeconds,
+                onStart = { startTranscription(activeUri) },
+                onCancel = { job?.cancel(); running = false },
                 onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
                 onShare = { result?.let { shareText(context, it) } },
             )
-            // Listen to the shared voice message while reading the transcript.
-            MessagePlayerCard(uri = sharedUri)
+            // Listen to the message while reading the transcript.
+            MessagePlayerCard(uri = activeUri)
         } else {
             Spacer(Modifier.height(8.dp))
             Text(
-                "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit \"Audio-Transkript\", um sie zu transkribieren.",
+                "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit \"Audio-Transkript\" – oder wähle oben eine Datei aus – um sie zu transkribieren.",
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -233,7 +273,9 @@ private fun TranscriptionPanel(
     result: String?,
     error: String?,
     hasKey: Boolean,
+    elapsedSeconds: Int,
     onStart: () -> Unit,
+    onCancel: () -> Unit,
     onCopy: () -> Unit,
     onShare: () -> Unit,
 ) {
@@ -251,8 +293,9 @@ private fun TranscriptionPanel(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         CircularProgressIndicator()
-                        Text("Wird transkribiert …")
+                        Text("Wird transkribiert … (${elapsedSeconds}s)")
                     }
+                    OutlinedButton(onClick = onCancel) { Text("Abbrechen") }
                 }
 
                 error != null -> {

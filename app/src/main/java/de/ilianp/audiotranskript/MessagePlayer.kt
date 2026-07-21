@@ -12,13 +12,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -42,8 +45,15 @@ enum class PlaybackSpeed(val factor: Float, val label: String) {
     X1(1.0f, "1×"),
     X1_5(1.5f, "1,5×"),
     X2(2.0f, "2×"),
-    X2_5(2.5f, "2,5×"),
+    X2_5(2.5f, "2,5×");
+
+    companion object {
+        fun fromFactor(factor: Float): PlaybackSpeed =
+            entries.firstOrNull { it.factor == factor } ?: X1
+    }
 }
+
+private const val SKIP_MS = 10_000
 
 /**
  * Holds a [MediaPlayer] and exposes its state to Compose. Speed is applied only while
@@ -54,6 +64,7 @@ enum class PlaybackSpeed(val factor: Float, val label: String) {
 class MessagePlayerController(
     private val context: Context,
     private val uri: Uri,
+    initialSpeed: PlaybackSpeed = PlaybackSpeed.X1,
 ) {
     var isPrepared by mutableStateOf(false)
         private set
@@ -63,7 +74,7 @@ class MessagePlayerController(
         private set
     var positionMs by mutableStateOf(0)
         private set
-    var speed by mutableStateOf(PlaybackSpeed.X1)
+    var speed by mutableStateOf(initialSpeed)
         private set
     var errorMessage by mutableStateOf<String?>(null)
         private set
@@ -130,6 +141,12 @@ class MessagePlayerController(
         positionMs = clamped
     }
 
+    /** Seeks [deltaMs] relative to the current position (clamped to the clip bounds). */
+    fun skip(deltaMs: Int) {
+        if (!isPrepared) return
+        seekTo(positionMs + deltaMs)
+    }
+
     /** Called periodically while playing to keep the progress bar in sync. */
     fun syncPosition() {
         val mp = player ?: return
@@ -167,7 +184,10 @@ private fun formatTime(ms: Int): String {
 @Composable
 fun MessagePlayerCard(uri: Uri, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val controller = remember(uri) { MessagePlayerController(context, uri) }
+    val settings = remember { Settings(context) }
+    val controller = remember(uri) {
+        MessagePlayerController(context, uri, PlaybackSpeed.fromFactor(settings.playbackSpeedFactor))
+    }
 
     DisposableEffect(uri) {
         controller.prepare()
@@ -192,9 +212,15 @@ fun MessagePlayerCard(uri: Uri, modifier: Modifier = Modifier) {
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 val atEnd = controller.durationMs > 0 && controller.positionMs >= controller.durationMs
+                IconButton(
+                    onClick = { controller.skip(-SKIP_MS) },
+                    enabled = controller.isPrepared,
+                ) {
+                    Icon(Icons.Filled.Replay10, contentDescription = "10 Sekunden zurück")
+                }
                 FilledIconButton(
                     onClick = { controller.togglePlayPause() },
                     enabled = controller.isPrepared,
@@ -211,6 +237,12 @@ fun MessagePlayerCard(uri: Uri, modifier: Modifier = Modifier) {
                         else -> "Abspielen"
                     }
                     Icon(icon, contentDescription = desc)
+                }
+                IconButton(
+                    onClick = { controller.skip(SKIP_MS) },
+                    enabled = controller.isPrepared,
+                ) {
+                    Icon(Icons.Filled.Forward10, contentDescription = "10 Sekunden vor")
                 }
 
                 Column(modifier = Modifier.weight(1f)) {
@@ -243,7 +275,10 @@ fun MessagePlayerCard(uri: Uri, modifier: Modifier = Modifier) {
                     PlaybackSpeed.entries.forEach { option ->
                         FilterChip(
                             selected = controller.speed == option,
-                            onClick = { controller.setSpeed(option) },
+                            onClick = {
+                                controller.setSpeed(option)
+                                settings.playbackSpeedFactor = option.factor
+                            },
                             label = { Text(option.label) },
                         )
                     }
