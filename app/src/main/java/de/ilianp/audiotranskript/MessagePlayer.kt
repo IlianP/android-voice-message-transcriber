@@ -1,6 +1,9 @@
 package de.ilianp.audiotranskript
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
@@ -55,6 +58,9 @@ enum class PlaybackSpeed(val factor: Float, val label: String) {
 
 private const val SKIP_MS = 10_000
 
+/** Volume used while another app briefly ducks us (e.g. a navigation prompt). */
+private const val DUCK_VOLUME = 0.2f
+
 /**
  * Holds a [MediaPlayer] and exposes its state to Compose. Speed is applied only while
  * playing (setting [MediaPlayer.setPlaybackParams] on a paused player can auto-resume on
@@ -81,9 +87,60 @@ class MessagePlayerController(
 
     private var player: MediaPlayer? = null
 
+    private val audioManager =
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    /** True while we currently hold audio focus, so we never abandon a request we never made. */
+    private var hasAudioFocus = false
+
+    /** Set when a transient focus loss paused us, so we resume once focus returns. */
+    private var resumeOnFocusGain = false
+
+    // Declared as spoken media. On Android Auto (and some Bluetooth setups) the car keeps the
+    // media channel muted until an app both declares proper attributes AND holds audio focus,
+    // so without this the playback is silent unless something else is already holding the
+    // channel open. Requesting focus is what makes the car route and unmute our stream.
+    private val audioAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
+
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                // Someone took over for good (another media app): stop and let focus go.
+                pausePlayback()
+                abandonAudioFocus()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                // Brief interruption (call, navigation prompt): pause, resume afterwards.
+                resumeOnFocusGain = isPlaying
+                pausePlayback()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                player?.setVolume(DUCK_VOLUME, DUCK_VOLUME)
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                player?.setVolume(1f, 1f)
+                if (resumeOnFocusGain) {
+                    resumeOnFocusGain = false
+                    startPlayback()
+                }
+            }
+        }
+    }
+
+    // Transient gain: we only need focus for the length of the message, and background music
+    // should resume once we are done rather than being stopped outright.
+    private val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        .setAudioAttributes(audioAttributes)
+        .setOnAudioFocusChangeListener(focusListener)
+        .build()
+
     fun prepare() {
         if (player != null) return
         val mp = MediaPlayer()
+        mp.setAudioAttributes(audioAttributes)
         try {
             mp.setDataSource(context, uri)
         } catch (e: Exception) {
@@ -100,10 +157,12 @@ class MessagePlayerController(
         mp.setOnCompletionListener {
             isPlaying = false
             positionMs = durationMs
+            abandonAudioFocus()
         }
         mp.setOnErrorListener { _, what, extra ->
             errorMessage = "Wiedergabe nicht möglich (Code $what/$extra)."
             isPlaying = false
+            abandonAudioFocus()
             true
         }
         player = mp
@@ -114,16 +173,20 @@ class MessagePlayerController(
         val mp = player ?: return
         if (!isPrepared) return
         if (mp.isPlaying) {
-            mp.pause()
-            isPlaying = false
+            pausePlayback()
+            abandonAudioFocus()
         } else {
             if (durationMs > 0 && positionMs >= durationMs) {
                 mp.seekTo(0)
                 positionMs = 0
             }
-            applySpeed(mp)
-            mp.start()
-            isPlaying = true
+            if (requestAudioFocus()) {
+                errorMessage = null
+                startPlayback()
+            } else {
+                errorMessage =
+                    "Wiedergabe momentan nicht möglich – Audio wird gerade anderweitig genutzt."
+            }
         }
     }
 
@@ -154,10 +217,39 @@ class MessagePlayerController(
     }
 
     fun release() {
+        abandonAudioFocus()
         player?.release()
         player = null
         isPlaying = false
         isPrepared = false
+    }
+
+    private fun startPlayback() {
+        val mp = player ?: return
+        applySpeed(mp)
+        mp.setVolume(1f, 1f)
+        mp.start()
+        isPlaying = true
+    }
+
+    private fun pausePlayback() {
+        val mp = player ?: return
+        if (mp.isPlaying) mp.pause()
+        isPlaying = false
+    }
+
+    private fun requestAudioFocus(): Boolean {
+        if (hasAudioFocus) return true
+        hasAudioFocus = audioManager.requestAudioFocus(focusRequest) ==
+            AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        return hasAudioFocus
+    }
+
+    private fun abandonAudioFocus() {
+        resumeOnFocusGain = false
+        if (!hasAudioFocus) return
+        audioManager.abandonAudioFocusRequest(focusRequest)
+        hasAudioFocus = false
     }
 
     private fun applySpeed(mp: MediaPlayer) {
