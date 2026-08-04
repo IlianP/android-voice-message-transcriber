@@ -1,7 +1,29 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+// Release-Signierung. Die Werte kommen entweder aus keystore.properties im
+// Projektwurzelverzeichnis (lokal, nicht eingecheckt) oder aus Umgebungs-
+// variablen (CI). Fehlt beides, faellt der Release-Build auf den Debug-Key
+// zurueck, damit ./gradlew assembleRelease auch ohne Keystore durchlaeuft --
+// solche APKs lassen sich aber nicht ueber eine echte Installation updaten.
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun signingValue(propertyKey: String, envKey: String): String? =
+    keystoreProperties.getProperty(propertyKey) ?: System.getenv(envKey)
+
+val releaseStorePath = signingValue("storeFile", "KEYSTORE_FILE")
+val hasReleaseKeystore = releaseStorePath != null && file(releaseStorePath).exists()
+
+// versionCode/-Name setzt die CI je Build; lokal bleibt es bei der Dev-Version.
+val buildVersionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
+val buildVersionName = System.getenv("VERSION_NAME") ?: "1.0-dev"
 
 android {
     namespace = "de.ilianp.audiotranskript"
@@ -11,12 +33,32 @@ android {
         applicationId = "de.ilianp.audiotranskript"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = buildVersionCode
+        versionName = buildVersionName
+    }
+
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = file(releaseStorePath!!)
+                storePassword = signingValue("storePassword", "KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "KEY_ALIAS")
+                keyPassword = signingValue("keyPassword", "KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                logger.warn(
+                    "Kein Release-Keystore gefunden - Release-Build wird mit dem " +
+                        "Debug-Key signiert und ist nicht zum Verteilen geeignet."
+                )
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

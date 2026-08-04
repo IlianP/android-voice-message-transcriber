@@ -1,0 +1,92 @@
+name: Release-APK
+
+# Baut bei jedem Merge nach main ein signiertes Release-APK und veroeffentlicht
+# es als GitHub Release. Manuell ausloesbar ueber "Run workflow".
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Zwei gleichzeitige Releases wuerden sich um denselben Tag streiten.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ohne Keystore wuerde der Build stillschweigend mit dem Debug-Key
+      # signieren - das APK liesse sich dann nicht ueber eine bestehende
+      # Installation aktualisieren. Also lieber frueh und laut abbrechen.
+      - name: Keystore-Secrets pruefen
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$KEYSTORE_BASE64" ]   || missing="$missing KEYSTORE_BASE64"
+          [ -n "$KEYSTORE_PASSWORD" ] || missing="$missing KEYSTORE_PASSWORD"
+          [ -n "$KEY_ALIAS" ]         || missing="$missing KEY_ALIAS"
+          [ -n "$KEY_PASSWORD" ]      || missing="$missing KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Fehlende Repository-Secrets:$missing - siehe README, Abschnitt 'Release-Signierung einrichten'."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Keystore bereitstellen
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Version bestimmen
+        id: version
+        run: |
+          version_name="1.0.${{ github.run_number }}"
+          echo "name=$version_name"    >> "$GITHUB_OUTPUT"
+          echo "tag=v$version_name"    >> "$GITHUB_OUTPUT"
+          echo "apk=Audio-Transkript-$version_name.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Release-APK bauen
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: APK benennen
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk \
+             "${{ steps.version.outputs.apk }}"
+
+      - name: Release veroeffentlichen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "${{ steps.version.outputs.apk }}" \
+            --title "Audio-Transkript ${{ steps.version.outputs.name }}" \
+            --generate-notes
+
+      - name: Keystore entfernen
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
