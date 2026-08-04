@@ -25,6 +25,7 @@ class Settings(context: Context) {
 
     private val prefs: SharedPreferences = createPrefs(context).also { securePrefs ->
         migrateLegacy(context, securePrefs)
+        dropObsoleteFalKey(context, securePrefs)
     }
 
     var groqApiKey: String
@@ -33,10 +34,10 @@ class Settings(context: Context) {
             prefs.edit().putString(KEY_GROQ, value.trim()).apply()
         }
 
-    var falApiKey: String
-        get() = prefs.getString(KEY_FAL, "") ?: ""
+    var sonioxApiKey: String
+        get() = prefs.getString(KEY_SONIOX, "") ?: ""
         set(value) {
-            prefs.edit().putString(KEY_FAL, value.trim()).apply()
+            prefs.edit().putString(KEY_SONIOX, value.trim()).apply()
         }
 
     var languageCode: String
@@ -56,7 +57,8 @@ class Settings(context: Context) {
         private const val SECURE_FILE = "settings_secure"
         private const val LEGACY_FILE = "settings"
         private const val KEY_GROQ = "api_key"
-        private const val KEY_FAL = "fal_api_key"
+        private const val KEY_SONIOX = "soniox_api_key"
+        private const val KEY_LEGACY_FAL = "fal_api_key"
         private const val KEY_LANG = "language"
         private const val KEY_SPEED = "playback_speed"
 
@@ -79,15 +81,28 @@ class Settings(context: Context) {
         /** Copies keys from the old plaintext file into [securePrefs] once, then clears them. */
         private fun migrateLegacy(context: Context, securePrefs: SharedPreferences) {
             val legacy = context.getSharedPreferences(LEGACY_FILE, Context.MODE_PRIVATE)
-            val hasLegacy = legacy.contains(KEY_GROQ) || legacy.contains(KEY_FAL) || legacy.contains(KEY_LANG)
+            val hasLegacy = legacy.contains(KEY_GROQ) || legacy.contains(KEY_LANG)
             if (!hasLegacy || securePrefs.contains(KEY_GROQ)) return
 
             securePrefs.edit()
                 .putString(KEY_GROQ, legacy.getString(KEY_GROQ, "") ?: "")
-                .putString(KEY_FAL, legacy.getString(KEY_FAL, "") ?: "")
                 .putString(KEY_LANG, legacy.getString(KEY_LANG, "") ?: "")
                 .apply()
             legacy.edit().clear().apply()
+        }
+
+        /**
+         * fal.ai was replaced by Soniox, so a stored fal key is dead weight. Remove it from both
+         * stores — including the plaintext file, which [migrateLegacy] may have skipped.
+         */
+        private fun dropObsoleteFalKey(context: Context, securePrefs: SharedPreferences) {
+            if (securePrefs.contains(KEY_LEGACY_FAL)) {
+                securePrefs.edit().remove(KEY_LEGACY_FAL).apply()
+            }
+            val legacy = context.getSharedPreferences(LEGACY_FILE, Context.MODE_PRIVATE)
+            if (legacy.contains(KEY_LEGACY_FAL)) {
+                legacy.edit().remove(KEY_LEGACY_FAL).apply()
+            }
         }
     }
 }
