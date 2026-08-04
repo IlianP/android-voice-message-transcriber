@@ -12,6 +12,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 /**
@@ -26,6 +27,15 @@ object SonioxClient {
     private const val MODEL = "stt-async-v5"
     private const val POLL_INTERVAL_MS = 1000L
     private const val TIMEOUT_MS = 120_000L
+
+    /**
+     * Tags everything this app creates, so [cleanUpLeftovers] can tell our uploads apart from
+     * anything else living in the same Soniox project (Playground files, other integrations).
+     */
+    private const val CLIENT_REF = "audio-transkript-app"
+
+    /** Leftovers are only swept once they are far past [TIMEOUT_MS], never while still in flight. */
+    private const val LEFTOVER_MIN_AGE_MS = 10 * 60 * 1000L
 
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
@@ -58,6 +68,80 @@ object SonioxClient {
         }
     }
 
+    /**
+     * Removes uploads and jobs that a previous run failed to clean up — the app process being
+     * killed mid-transcription, or a DELETE that never made it out.
+     *
+     * Deliberately narrow: an API key belongs to exactly one Soniox project, so nothing outside
+     * that project is reachable in the first place. Within it, only entries tagged with
+     * [CLIENT_REF] and older than [minAgeMs] are touched, which leaves Playground files, other
+     * integrations sharing the key, and this app's own in-flight transcription alone.
+     *
+     * Returns the number of deleted entries. Best effort: any failure just leaves the leftover
+     * for the next attempt.
+     */
+    suspend fun cleanUpLeftovers(
+        apiKey: String,
+        minAgeMs: Long = LEFTOVER_MIN_AGE_MS,
+    ): Int = withContext(Dispatchers.IO) {
+        val cutoff = System.currentTimeMillis() - minAgeMs
+        var deleted = 0
+
+        // Jobs first: a transcription still referencing a file cannot be deleted while it runs.
+        for (job in listAll("transcriptions", apiKey)) {
+            val status = job.optString("status")
+            if (status != "completed" && status != "error") continue
+            if (!isOurs(job, cutoff)) continue
+            if (delete("$BASE/transcriptions/${job.optString("id")}", apiKey)) deleted++
+        }
+
+        for (file in listAll("files", apiKey)) {
+            if (!isOurs(file, cutoff)) continue
+            if (delete("$BASE/files/${file.optString("id")}", apiKey)) deleted++
+        }
+
+        deleted
+    }
+
+    /** True only for entries this app created and that are old enough to not be in flight. */
+    private fun isOurs(entry: JSONObject, cutoff: Long): Boolean {
+        if (entry.optString("client_reference_id") != CLIENT_REF) return false
+        val createdAt = parseTimestamp(entry.optString("created_at")) ?: return false
+        return createdAt < cutoff
+    }
+
+    /** Soniox timestamps are ISO-8601 UTC, e.g. `2026-08-04T05:16:53.645Z`. */
+    private fun parseTimestamp(value: String): Long? =
+        runCatching { Instant.parse(value).toEpochMilli() }.getOrNull()
+
+    private fun listAll(collection: String, apiKey: String): List<JSONObject> {
+        val all = mutableListOf<JSONObject>()
+        var cursor: String? = null
+
+        do {
+            val url = "$BASE/$collection?limit=1000" + (cursor?.let { "&cursor=$it" } ?: "")
+            val req = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+
+            val page = runCatching {
+                http.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) null else JSONObject(resp.body?.string().orEmpty())
+                }
+            }.getOrNull() ?: return all
+
+            val items = page.optJSONArray(collection) ?: return all
+            for (i in 0 until items.length()) {
+                items.optJSONObject(i)?.let { all += it }
+            }
+            cursor = page.optString("next_page_cursor").ifBlank { null }
+        } while (cursor != null)
+
+        return all
+    }
+
     private fun uploadAudio(payload: AudioPayload, apiKey: String): String {
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -66,6 +150,7 @@ object SonioxClient {
                 payload.filename,
                 payload.bytes.toRequestBody(payload.mimeType.toMediaTypeOrNull()),
             )
+            .addFormDataPart("client_reference_id", CLIENT_REF)
             .build()
 
         val req = Request.Builder()
@@ -86,6 +171,7 @@ object SonioxClient {
         val body = JSONObject().apply {
             put("model", MODEL)
             put("file_id", fileId)
+            put("client_reference_id", CLIENT_REF)
             // No hint means Soniox detects the language itself.
             if (languageCode.isNotBlank()) put("language_hints", JSONArray().put(languageCode))
         }
@@ -151,16 +237,15 @@ object SonioxClient {
         }
     }
 
-    private fun delete(url: String, apiKey: String) {
-        runCatching {
-            val req = Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer $apiKey")
-                .delete()
-                .build()
-            http.newCall(req).execute().close()
-        }
-    }
+    /** Returns true when the entry is gone; failures are swallowed and simply retried later. */
+    private fun delete(url: String, apiKey: String): Boolean = runCatching {
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .delete()
+            .build()
+        http.newCall(req).execute().use { it.isSuccessful }
+    }.getOrDefault(false)
 
     /** Soniox reports errors as JSON with a readable `message`; fall back to the raw body. */
     private fun describe(code: Int, body: String): String {

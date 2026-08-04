@@ -134,6 +134,18 @@ fun AppScreen(sharedUri: Uri?) {
         if (sharedUri != null && hasKey) startTranscription(sharedUri)
     }
 
+    // Safety net: if a previous run was killed before it could clean up, the audio would sit on
+    // Soniox indefinitely (they never expire uploads themselves). Sweep it here, off the hot path.
+    LaunchedEffect(Unit) {
+        val key = settings.sonioxApiKey
+        if (key.isBlank()) return@LaunchedEffect
+        val removed = runCatching { SonioxClient.cleanUpLeftovers(key) }.getOrDefault(0)
+        if (removed > 0) {
+            DebugLog.addSonioxJob(context, "$removed Reste beim Start aufgeräumt")
+            debugLog = DebugLog.get(context)
+        }
+    }
+
     LaunchedEffect(running) {
         if (running) {
             while (true) {

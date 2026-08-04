@@ -11,7 +11,10 @@ und **parallel Anhören**.
 - **Transkription** über:
   - **Groq** (`whisper-large-v3-turbo`) – schnell, primär.
   - **Soniox** (`stt-async-v5`) – optionaler Fallback (kurzer Upload, wird direkt nach dem
-    Abruf des Texts wieder gelöscht).
+    Abruf des Texts wieder gelöscht; Soniox selbst löscht Uploads nie automatisch).
+    Beim App-Start werden zusätzlich Reste abgeräumt, falls die App vorher abgestürzt ist –
+    ausschließlich eigene Uploads, erkennbar an `client_reference_id`, und erst ab 10 Minuten
+    Alter, damit eine laufende Transkription nicht getroffen wird.
 - **▶️ Nachricht anhören** direkt beim Lesen, mit einstellbarem Tempo **1× / 1,5× / 2× / 2,5×**,
   Play/Pause, Fortschrittsleiste und Zeitanzeige.
 - Transkript **kopieren** / **teilen**, Text ist markierbar.
