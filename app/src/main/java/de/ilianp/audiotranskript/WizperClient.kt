@@ -8,7 +8,7 @@ class WizperException(message: String) : Exception(message)
 
 /**
  * Orchestrates transcription: tries Groq first (fast, cheap) and falls back to the
- * fal.ai Wizper queue if Groq is unavailable or fails.
+ * Soniox async API if Groq is unavailable or fails.
  */
 object WizperClient {
 
@@ -16,11 +16,11 @@ object WizperClient {
         context: Context,
         audioUri: Uri,
         groqApiKey: String,
-        falApiKey: String,
+        sonioxApiKey: String,
         languageCode: String,
-        onFalUpload: (String) -> Unit = {},
+        onSonioxJob: (String) -> Unit = {},
     ): String {
-        if (groqApiKey.isBlank() && falApiKey.isBlank()) {
+        if (groqApiKey.isBlank() && sonioxApiKey.isBlank()) {
             throw WizperException("Kein API-Key gesetzt. Bitte in den Einstellungen eintragen.")
         }
 
@@ -35,11 +35,11 @@ object WizperClient {
             }
         }
 
-        if (falApiKey.isNotBlank()) {
+        if (sonioxApiKey.isNotBlank()) {
             try {
-                return FalClient.transcribe(payload, falApiKey, languageCode, onFalUpload)
+                return SonioxClient.transcribe(payload, sonioxApiKey, languageCode, onSonioxJob)
             } catch (e: Exception) {
-                errors += "fal.ai-Fallback fehlgeschlagen: ${e.message}"
+                errors += "Soniox-Fallback fehlgeschlagen: ${e.message}"
             }
         }
 

@@ -7,22 +7,22 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Tiny persisted log of fal.ai uploads, shown only in debug builds so the temporary
- * upload URLs can be checked (they should expire after ~5 minutes).
+ * Tiny persisted log of Soniox jobs, shown only in debug builds so it can be verified that
+ * every upload and transcription is cleaned up again after the text has been fetched.
  */
 object DebugLog {
     private const val PREFS = "debug_log"
-    private const val KEY = "fal_uploads"
+    private const val KEY = "soniox_jobs"
     private const val MAX_ENTRIES = 20
     private val TS = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
 
-    fun addFalUpload(context: Context, url: String) {
+    fun addSonioxJob(context: Context, info: String) {
         if (!BuildConfig.DEBUG) return
         val now = TS.format(Date())
-        Log.d("AudioTranskript", "fal upload @ $now -> $url")
+        Log.d("AudioTranskript", "soniox job @ $now -> $info")
 
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val entry = "$now (+5 Min Ablauf)\n$url"
+        val entry = "$now (wird nach Abruf gelöscht)\n$info"
         val old = prefs.getString(KEY, "").orEmpty()
         val entries = (listOf(entry) + old.split("\n\n").filter { it.isNotBlank() }).take(MAX_ENTRIES)
         prefs.edit().putString(KEY, entries.joinToString("\n\n")).apply()
@@ -30,9 +30,6 @@ object DebugLog {
 
     fun get(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, "").orEmpty()
-
-    fun latestUrl(context: Context): String? =
-        get(context).lineSequence().firstOrNull { it.startsWith("http") }
 
     fun clear(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
