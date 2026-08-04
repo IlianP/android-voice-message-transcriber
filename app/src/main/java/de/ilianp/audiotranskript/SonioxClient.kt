@@ -23,10 +23,13 @@ import java.util.concurrent.TimeUnit
  * both until they are explicitly removed, so the audio must not be left behind on their side.
  */
 object SonioxClient {
-    private const val BASE = "https://api.soniox.com/v1"
+    /** Overridable only so tests can point at a [okhttp3.mockwebserver.MockWebServer] instead. */
+    internal var baseUrl = "https://api.soniox.com/v1"
     private const val MODEL = "stt-async-v5"
-    private const val POLL_INTERVAL_MS = 1000L
-    private const val TIMEOUT_MS = 120_000L
+
+    /** Overridable so tests don't have to wait out real polling/timeout delays. */
+    internal var pollIntervalMs = 1000L
+    internal var timeoutMs = 120_000L
 
     /**
      * Tags everything this app creates, so [cleanUpLeftovers] can tell our uploads apart from
@@ -34,7 +37,7 @@ object SonioxClient {
      */
     private const val CLIENT_REF = "audio-transkript-app"
 
-    /** Leftovers are only swept once they are far past [TIMEOUT_MS], never while still in flight. */
+    /** Leftovers are only swept once they are far past [timeoutMs], never while still in flight. */
     private const val LEFTOVER_MIN_AGE_MS = 10 * 60 * 1000L
 
     private val JSON = "application/json; charset=utf-8".toMediaType()
@@ -62,8 +65,8 @@ object SonioxClient {
         } finally {
             // Best effort: never let cleanup failures mask the real result or error.
             withContext(NonCancellable) {
-                transcriptionId?.let { delete("$BASE/transcriptions/$it", apiKey) }
-                delete("$BASE/files/$fileId", apiKey)
+                transcriptionId?.let { delete("$baseUrl/transcriptions/$it", apiKey) }
+                delete("$baseUrl/files/$fileId", apiKey)
             }
         }
     }
@@ -92,12 +95,12 @@ object SonioxClient {
             val status = job.optString("status")
             if (status != "completed" && status != "error") continue
             if (!isOurs(job, cutoff)) continue
-            if (delete("$BASE/transcriptions/${job.optString("id")}", apiKey)) deleted++
+            if (delete("$baseUrl/transcriptions/${job.optString("id")}", apiKey)) deleted++
         }
 
         for (file in listAll("files", apiKey)) {
             if (!isOurs(file, cutoff)) continue
-            if (delete("$BASE/files/${file.optString("id")}", apiKey)) deleted++
+            if (delete("$baseUrl/files/${file.optString("id")}", apiKey)) deleted++
         }
 
         deleted
@@ -119,7 +122,7 @@ object SonioxClient {
         var cursor: String? = null
 
         do {
-            val url = "$BASE/$collection?limit=1000" + (cursor?.let { "&cursor=$it" } ?: "")
+            val url = "$baseUrl/$collection?limit=1000" + (cursor?.let { "&cursor=$it" } ?: "")
             val req = Request.Builder()
                 .url(url)
                 .addHeader("Authorization", "Bearer $apiKey")
@@ -154,7 +157,7 @@ object SonioxClient {
             .build()
 
         val req = Request.Builder()
-            .url("$BASE/files")
+            .url("$baseUrl/files")
             .addHeader("Authorization", "Bearer $apiKey")
             .post(body)
             .build()
@@ -177,7 +180,7 @@ object SonioxClient {
         }
 
         val req = Request.Builder()
-            .url("$BASE/transcriptions")
+            .url("$baseUrl/transcriptions")
             .addHeader("Authorization", "Bearer $apiKey")
             .post(body.toString().toRequestBody(JSON))
             .build()
@@ -191,11 +194,11 @@ object SonioxClient {
     }
 
     private suspend fun pollUntilDone(transcriptionId: String, apiKey: String) {
-        val deadline = System.currentTimeMillis() + TIMEOUT_MS
+        val deadline = System.currentTimeMillis() + timeoutMs
 
         while (true) {
             val req = Request.Builder()
-                .url("$BASE/transcriptions/$transcriptionId")
+                .url("$baseUrl/transcriptions/$transcriptionId")
                 .addHeader("Authorization", "Bearer $apiKey")
                 .get()
                 .build()
@@ -215,7 +218,7 @@ object SonioxClient {
                     if (System.currentTimeMillis() > deadline) {
                         throw WizperException("Zeitüberschreitung bei der Transkription.")
                     }
-                    delay(POLL_INTERVAL_MS)
+                    delay(pollIntervalMs)
                 }
                 else -> throw WizperException("Unerwarteter Status: $status")
             }
@@ -224,7 +227,7 @@ object SonioxClient {
 
     private fun fetchTranscript(transcriptionId: String, apiKey: String): String {
         val req = Request.Builder()
-            .url("$BASE/transcriptions/$transcriptionId/transcript")
+            .url("$baseUrl/transcriptions/$transcriptionId/transcript")
             .addHeader("Authorization", "Bearer $apiKey")
             .get()
             .build()

@@ -47,10 +47,21 @@ app/src/main/java/de/ilianp/audiotranskript/
 
 ```bash
 ./gradlew assembleDebug     # Debug-APK -> app/build/outputs/apk/debug/
+./gradlew test              # Unit-Tests (offline, kein API-Key nötig)
 ```
 
 - `minSdk` 26, `targetSdk`/`compileSdk` 35
 - Jetpack Compose (Material 3), OkHttp, Kotlin Coroutines
+
+## Tests
+
+`app/src/test/.../SonioxClientTest.kt` deckt `SonioxClient` gegen einen `MockWebServer` ab:
+Upload → Poll → Transkript → Aufräumen im Erfolgsfall, beide Soniox-Fehlerformen (HTTP-Fehler
+mit `message`-Feld und `status: error`), Timeout, sowie alle Filterregeln des Start-Sweeps
+(`cleanUpLeftovers`) – eigener vs. fremder `client_reference_id`, Alters-Schwelle, laufende
+Jobs, Pagination. Läuft komplett offline über `./gradlew test`, ohne echten Soniox-Key.
+`SonioxClient.baseUrl`/`pollIntervalMs`/`timeoutMs` sind dafür `internal var` statt `const val`,
+damit Tests sie umbiegen können.
 
 ## Einrichtung
 
