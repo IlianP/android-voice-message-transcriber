@@ -84,7 +84,7 @@ fun AppScreen(sharedUri: Uri?) {
     val settings = remember { Settings(context) }
 
     var groqKey by remember { mutableStateOf(settings.groqApiKey) }
-    var falKey by remember { mutableStateOf(settings.falApiKey) }
+    var sonioxKey by remember { mutableStateOf(settings.sonioxApiKey) }
     var langCode by remember { mutableStateOf(settings.languageCode) }
     var savedHint by remember { mutableStateOf(false) }
 
@@ -96,7 +96,7 @@ fun AppScreen(sharedUri: Uri?) {
     var job by remember { mutableStateOf<Job?>(null) }
     var debugLog by remember { mutableStateOf(DebugLog.get(context)) }
 
-    val hasKey = groqKey.isNotBlank() || falKey.isNotBlank()
+    val hasKey = groqKey.isNotBlank() || sonioxKey.isNotBlank()
     val activeUri = sharedUri ?: pickedUri
 
     fun startTranscription(uri: Uri) {
@@ -107,8 +107,8 @@ fun AppScreen(sharedUri: Uri?) {
         elapsedSeconds = 0
         job = scope.launch {
             try {
-                result = WizperClient.transcribe(context, uri, groqKey, falKey, langCode) { url ->
-                    DebugLog.addFalUpload(context, url)
+                result = WizperClient.transcribe(context, uri, groqKey, sonioxKey, langCode) { info ->
+                    DebugLog.addSonioxJob(context, info)
                     debugLog = DebugLog.get(context)
                 }
             } catch (e: CancellationException) {
@@ -132,6 +132,18 @@ fun AppScreen(sharedUri: Uri?) {
 
     LaunchedEffect(Unit) {
         if (sharedUri != null && hasKey) startTranscription(sharedUri)
+    }
+
+    // Safety net: if a previous run was killed before it could clean up, the audio would sit on
+    // Soniox indefinitely (they never expire uploads themselves). Sweep it here, off the hot path.
+    LaunchedEffect(Unit) {
+        val key = settings.sonioxApiKey
+        if (key.isBlank()) return@LaunchedEffect
+        val removed = runCatching { SonioxClient.cleanUpLeftovers(key) }.getOrDefault(0)
+        if (removed > 0) {
+            DebugLog.addSonioxJob(context, "$removed Reste beim Start aufgeräumt")
+            debugLog = DebugLog.get(context)
+        }
     }
 
     LaunchedEffect(running) {
@@ -162,11 +174,11 @@ fun AppScreen(sharedUri: Uri?) {
         )
 
         OutlinedTextField(
-            value = falKey,
-            onValueChange = { falKey = it; savedHint = false },
-            label = { Text("fal.ai API-Key (Fallback, optional)") },
+            value = sonioxKey,
+            onValueChange = { sonioxKey = it; savedHint = false },
+            label = { Text("Soniox API-Key (Fallback, optional)") },
             supportingText = {
-                Text("Greift nur, wenn Groq fehlschlägt. Audio wird kurz hochgeladen und nach 5 Min automatisch gelöscht.")
+                Text("Greift nur, wenn Groq fehlschlägt. Audio wird kurz hochgeladen und direkt nach der Transkription wieder gelöscht.")
             },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
@@ -178,10 +190,10 @@ fun AppScreen(sharedUri: Uri?) {
         Button(
             onClick = {
                 settings.groqApiKey = groqKey
-                settings.falApiKey = falKey
+                settings.sonioxApiKey = sonioxKey
                 settings.languageCode = langCode
                 groqKey = settings.groqApiKey
-                falKey = settings.falApiKey
+                sonioxKey = settings.sonioxApiKey
                 savedHint = true
             },
             modifier = Modifier.fillMaxWidth(),
@@ -227,7 +239,6 @@ fun AppScreen(sharedUri: Uri?) {
             Spacer(Modifier.height(8.dp))
             DebugPanel(
                 log = debugLog,
-                onOpenLatest = { DebugLog.latestUrl(context)?.let { openUrl(context, it) } },
                 onCopy = { clipboard.setText(AnnotatedString(debugLog)) },
                 onClear = { DebugLog.clear(context); debugLog = "" },
             )
@@ -330,7 +341,6 @@ private fun TranscriptionPanel(
 @Composable
 private fun DebugPanel(
     log: String,
-    onOpenLatest: () -> Unit,
     onCopy: () -> Unit,
     onClear: () -> Unit,
 ) {
@@ -341,31 +351,25 @@ private fun DebugPanel(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("Debug: fal.ai-Uploads", style = MaterialTheme.typography.titleMedium)
+            Text("Debug: Soniox-Jobs", style = MaterialTheme.typography.titleMedium)
             if (log.isBlank()) {
                 Text(
-                    "Noch keine Uploads. Greift erst, wenn der fal-Fallback genutzt wird.",
+                    "Noch keine Jobs. Greift erst, wenn der Soniox-Fallback genutzt wird.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             } else {
                 Text(log, style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onOpenLatest) { Text("Neueste öffnen") }
                     OutlinedButton(onClick = onCopy) { Text("Kopieren") }
                     OutlinedButton(onClick = onClear) { Text("Leeren") }
                 }
                 Text(
-                    "Tipp: URL nach 5 Min im Browser öffnen – sollte dann nicht mehr abrufbar sein.",
+                    "Tipp: IDs in der Soniox-Console prüfen – Datei und Job sollten dort nicht mehr auftauchen.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
     }
-}
-
-private fun openUrl(context: Context, url: String) {
-    val view = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-    context.startActivity(Intent.createChooser(view, "URL öffnen"))
 }
 
 private fun shareText(context: Context, text: String) {
