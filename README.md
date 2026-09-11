@@ -33,24 +33,29 @@ entsprechend sortiert:
 1. **Einstellungen** – flache, zuklappbare Zeile ganz oben. Standardmäßig zugeklappt; sie zeigt
    dann nur eine Zusammenfassung („MAI-Transcribe-2 · Deutsch"). Aufgeklappt startet sie nur,
    wenn noch kein Key gesetzt ist, und klappt sich nach dem Speichern wieder weg.
-2. **Player** – direkt über dem Transkript, damit er seinen Platz behält und nicht mitwandert,
-   wenn darunter ein langes Transkript erscheint.
-3. **Transkript** – der eigentliche Inhalt, mit Kopieren / Teilen / Neu.
+2. **Transkript** – der eigentliche Inhalt, mit Kopieren / Teilen / Neu. Scrollt frei.
+3. **Player** – als `bottomBar` des `Scaffold` fest am unteren Rand verankert. Er bleibt sichtbar
+   und bedienbar, egal wie weit das Transkript darüber gescrollt ist, und liegt in Daumenreichweite.
+   Die Leiste zeichnet ihr eigenes `navigationBarsPadding()`, weil die App unter Android 15
+   zwangsweise edge-to-edge läuft.
+
+Der Player erscheint nur, wenn tatsächlich eine Audiodatei geteilt oder ausgewählt wurde – sonst
+gibt es keine bottomBar und der Inhalt bekommt die volle Höhe.
 
 ## Der Player (neu)
 
 `MessagePlayer.kt` kapselt einen `MediaPlayer` in `MessagePlayerController` und stellt den
-Zustand (Position, Dauer, Tempo, Play/Pause) als Compose-State bereit. `MessagePlayerCard`
-rendert die Bedienelemente und erscheint unter dem Transkript, sobald eine Sprachnachricht
-geteilt wurde. Das Tempo wird über `MediaPlayer.playbackParams.setSpeed(...)` gesetzt
+Zustand (Position, Dauer, Tempo, Play/Pause) als Compose-State bereit. `MessagePlayerBar`
+rendert die Bedienelemente als fixierte Leiste am unteren Bildschirmrand, sobald eine
+Sprachnachricht geteilt wurde. Das Tempo wird über `MediaPlayer.playbackParams.setSpeed(...)` gesetzt
 (API 23+). Damit lässt sich die Nachricht **gleichzeitig lesen und hören**.
 
 ## Projektstruktur
 
 ```
 app/src/main/java/de/ilianp/audiotranskript/
-├── MainActivity.kt      # UI (Compose): zuklappbare Einstellungen, Player, Transkriptions-Panel
-├── MessagePlayer.kt     # ▶️ Audio-Player mit Tempo 1×–2,5×  (neu)
+├── MainActivity.kt      # UI (Compose): Scaffold, zuklappbare Einstellungen, Transkriptions-Panel
+├── MessagePlayer.kt     # ▶️ Audio-Player mit Tempo 1×–2,5×, fix am unteren Rand
 ├── WizperClient.kt      # Orchestrierung: OpenRouter, dann Groq, dann Soniox
 ├── OpenRouterClient.kt  # OpenRouter STT API (MAI-Transcribe-2)
 ├── GroqClient.kt        # Groq Whisper API

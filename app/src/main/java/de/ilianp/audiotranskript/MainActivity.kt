@@ -37,6 +37,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -174,80 +175,86 @@ fun AppScreen(sharedUri: Uri?) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Audio-Transkript", style = MaterialTheme.typography.headlineSmall)
-
-        SettingsSection(
-            expanded = settingsExpanded,
-            onToggle = { settingsExpanded = !settingsExpanded; savedHint = false },
-            summary = settingsSummary(openRouterKey, groqKey, sonioxKey, langCode),
-            openRouterKey = openRouterKey,
-            onOpenRouterKeyChange = { openRouterKey = it; savedHint = false },
-            groqKey = groqKey,
-            onGroqKeyChange = { groqKey = it; savedHint = false },
-            sonioxKey = sonioxKey,
-            onSonioxKeyChange = { sonioxKey = it; savedHint = false },
-            langCode = langCode,
-            onLangSelect = { langCode = it; savedHint = false },
-            savedHint = savedHint,
-            onSave = {
-                settings.openRouterApiKey = openRouterKey
-                settings.groqApiKey = groqKey
-                settings.sonioxApiKey = sonioxKey
-                settings.languageCode = langCode
-                openRouterKey = settings.openRouterApiKey
-                groqKey = settings.groqApiKey
-                sonioxKey = settings.sonioxApiKey
-                savedHint = true
-                // Saved settings have served their purpose - give the screen back to the transcript.
-                settingsExpanded = false
-            },
-        )
-
-        OutlinedButton(
-            onClick = { picker.launch(arrayOf("audio/*")) },
-            modifier = Modifier.fillMaxWidth(),
+    Scaffold(
+        bottomBar = {
+            // Pinned to the bottom: the message stays playable however far the transcript below
+            // it has been scrolled, and the controls stay in reach of the thumb.
+            if (activeUri != null) MessagePlayerBar(uri = activeUri)
+        },
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Audiodatei auswählen")
-        }
+            Text("Audio-Transkript", style = MaterialTheme.typography.headlineSmall)
 
-        if (activeUri != null) {
-            Spacer(Modifier.height(8.dp))
-            // The player sits above the transcript so it keeps its place instead of being pushed
-            // around as the transcript below it grows.
-            MessagePlayerCard(uri = activeUri)
-            TranscriptionPanel(
-                running = running,
-                result = result,
-                error = error,
-                hasKey = hasKey,
-                elapsedSeconds = elapsedSeconds,
-                onStart = { startTranscription(activeUri) },
-                onCancel = { job?.cancel(); running = false },
-                onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
-                onShare = { result?.let { shareText(context, it) } },
+            SettingsSection(
+                expanded = settingsExpanded,
+                onToggle = { settingsExpanded = !settingsExpanded; savedHint = false },
+                summary = settingsSummary(openRouterKey, groqKey, sonioxKey, langCode),
+                openRouterKey = openRouterKey,
+                onOpenRouterKeyChange = { openRouterKey = it; savedHint = false },
+                groqKey = groqKey,
+                onGroqKeyChange = { groqKey = it; savedHint = false },
+                sonioxKey = sonioxKey,
+                onSonioxKeyChange = { sonioxKey = it; savedHint = false },
+                langCode = langCode,
+                onLangSelect = { langCode = it; savedHint = false },
+                savedHint = savedHint,
+                onSave = {
+                    settings.openRouterApiKey = openRouterKey
+                    settings.groqApiKey = groqKey
+                    settings.sonioxApiKey = sonioxKey
+                    settings.languageCode = langCode
+                    openRouterKey = settings.openRouterApiKey
+                    groqKey = settings.groqApiKey
+                    sonioxKey = settings.sonioxApiKey
+                    savedHint = true
+                    // Saved settings have served their purpose - give the screen back to the transcript.
+                    settingsExpanded = false
+                },
             )
-        } else {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit \"Audio-Transkript\" – oder wähle oben eine Datei aus – um sie zu transkribieren.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
 
-        if (BuildConfig.DEBUG) {
-            Spacer(Modifier.height(8.dp))
-            DebugPanel(
-                log = debugLog,
-                onCopy = { clipboard.setText(AnnotatedString(debugLog)) },
-                onClear = { DebugLog.clear(context); debugLog = "" },
-            )
+            OutlinedButton(
+                onClick = { picker.launch(arrayOf("audio/*")) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Audiodatei auswählen")
+            }
+
+            if (activeUri != null) {
+                Spacer(Modifier.height(8.dp))
+                TranscriptionPanel(
+                    running = running,
+                    result = result,
+                    error = error,
+                    hasKey = hasKey,
+                    elapsedSeconds = elapsedSeconds,
+                    onStart = { startTranscription(activeUri) },
+                    onCancel = { job?.cancel(); running = false },
+                    onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
+                    onShare = { result?.let { shareText(context, it) } },
+                )
+            } else {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit \"Audio-Transkript\" – oder wähle oben eine Datei aus – um sie zu transkribieren.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+
+            if (BuildConfig.DEBUG) {
+                Spacer(Modifier.height(8.dp))
+                DebugPanel(
+                    log = debugLog,
+                    onCopy = { clipboard.setText(AnnotatedString(debugLog)) },
+                    onClear = { DebugLog.clear(context); debugLog = "" },
+                )
+            }
         }
     }
 }
