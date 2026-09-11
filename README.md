@@ -70,12 +70,41 @@ app/src/main/java/de/ilianp/audiotranskript/
 ```bash
 ./gradlew assembleDebug     # Debug-APK -> app/build/outputs/apk/debug/
 ./gradlew test              # Unit-Tests (offline, kein API-Key nötig)
+./gradlew testDebugUnitTest --tests '*ScreenshotTest*'   # Screenshots -> app/build/screenshots/
 ```
 
 - `minSdk` 26, `targetSdk`/`compileSdk` 35
 - Jetpack Compose (Material 3), OkHttp, Kotlin Coroutines
 
 ## Tests
+
+### Optische Tests (Screenshots ohne Emulator)
+
+`app/src/testDebug/.../ScreenshotTest.kt` rendert den echten Bildschirm auf der JVM und legt
+PNGs unter `app/build/screenshots/` ab:
+
+```bash
+./gradlew testDebugUnitTest --tests '*ScreenshotTest*'
+```
+
+Möglich macht das Robolectric im `NATIVE`-Graphics-Modus – echte Pixel, kein Emulator, keine
+Hardwarebeschleunigung nötig. Damit lässt sich ein UI-Umbau auch dort ansehen und in CI prüfen,
+wo kein Gerät und kein KVM verfügbar ist. Der Ablauf ist der echte: der Transkriptionsaufruf geht
+gegen einen `MockWebServer` (über `OpenRouterClient.baseUrl`), der Player bekommt über
+`ShadowMediaPlayer` eine Dauer, und die Einstellungen kommen aus den echten `SharedPreferences`.
+
+Abgedeckte Zustände: Erststart mit offenen Einstellungen, zugeklappte Einstellungen mit
+Zusammenfassung, wieder aufgeklappt per Klick, Transkript mit fixierter Player-Leiste sowie der
+gescrollte Zustand. Die Bilder sind Review-Artefakte, keine Golden Files – geprüft wird per
+Assertion nur, was ein Bild allein nicht zeigt, etwa dass die letzte Inhaltszeile über der
+Player-Leiste endet und nicht dahinter verschwindet.
+
+**Grenze:** Robolectric meldet keine System-Bar-Insets. Statusleiste und Gestenleiste tauchen in
+den Screenshots also nicht auf, und das `navigationBarsPadding()` der Player-Leiste lässt sich
+damit nicht nachweisen – das bleibt ein Check am echten Gerät.
+
+Die Tests liegen im `testDebug`-Source-Set: die Host-Activity stammt aus `ui-test-manifest`, einer
+reinen Debug-Abhängigkeit.
 
 `app/src/test/.../OpenRouterClientTest.kt` deckt `OpenRouterClient` gegen einen `MockWebServer` ab:
 Request-Form (Modell, base64-Audio, Format-Mapping, Sprache), beide OpenRouter-Fehlerformen

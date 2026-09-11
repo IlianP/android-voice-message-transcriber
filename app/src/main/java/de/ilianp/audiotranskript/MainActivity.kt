@@ -319,7 +319,7 @@ private fun SettingsSection(
                     onValueChange = onOpenRouterKeyChange,
                     label = { Text("OpenRouter API-Key") },
                     supportingText = {
-                        Text("Primäres Modell: MAI-Transcribe-2 von Microsoft, rund 0,10 $ pro Stunde Audio.")
+                        Text("Primäres Modell: MAI-Transcribe-2 von Microsoft, rund 0,10 $ pro Stunde Audio.")
                     },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
