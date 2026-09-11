@@ -64,9 +64,16 @@ Keystore-Erzeugung (auch ohne Rechner, über Termux) steht in der README unter
 
 `.github/workflows/release.yml` baut bei jedem Push auf `main` automatisch ein
 signiertes APK und veröffentlicht es als GitHub Release (`v1.0.<Lauf-Nummer>`,
-Release-Notes automatisch generiert). Der `/release-check`-Skill (siehe
-`.claude/skills/release-check/`) prüft ein fertiges Release: Signatur-Fingerabdruck,
-versionCode/versionName, Provider-Erreichbarkeit der Test-Suite.
+Release-Notes automatisch generiert). Ein `paths-ignore` überspringt den Build,
+wenn ein Push ausschließlich Markdown-Dateien oder `.claude/**` ändert — reine
+Doku-/Tooling-Commits erzeugen so kein Leerlauf-Release.
+
+Der `/release-check`-Skill (siehe `.claude/skills/release-check/`) prüft ein
+fertiges Release: Signatur kryptografisch verifiziert (nicht nur ausgelesen),
+Fingerabdruck-Abgleich gegen den oben hinterlegten Wert, sowie versionCode
+(nicht nur versionName) gegen das vorherige Release. Er prüft **nicht**, ob
+die konfigurierten Transkriptions-Provider erreichbar sind — das wurde hier
+ursprünglich fälschlich behauptet und war nie Teil des Skills.
 
 ## Cloud-Umgebung beschleunigen (optional, noch nicht eingerichtet)
 
