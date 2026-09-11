@@ -32,6 +32,16 @@ object OpenRouterClient {
      * what Groq's multipart endpoint takes), so map the extras onto the container that actually
      * carries them.
      */
+    /**
+     * Formats that the file extension alone cannot express. [readAudio] renames a raw AAC file
+     * to `audio.m4a`, because `aac` is not one of the extensions Groq's endpoint takes - but
+     * those bytes are ADTS AAC, not an MP4 container, and OpenRouter is told the format outright
+     * rather than sniffing it. So the MIME type has the last word where the two disagree.
+     */
+    private val MIME_TO_FORMAT = mapOf(
+        "audio/aac" to "aac",
+    )
+
     private val EXT_TO_FORMAT = mapOf(
         "flac" to "flac",
         "mp3" to "mp3",
@@ -89,6 +99,7 @@ object OpenRouterClient {
     }
 
     private fun formatOf(payload: AudioPayload): String {
+        MIME_TO_FORMAT[payload.mimeType.lowercase(Locale.ROOT)]?.let { return it }
         val ext = payload.filename.substringAfterLast('.', "").lowercase(Locale.ROOT)
         return EXT_TO_FORMAT[ext] ?: "ogg"
     }

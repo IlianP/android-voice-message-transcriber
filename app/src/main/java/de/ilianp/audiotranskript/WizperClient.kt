@@ -2,6 +2,7 @@ package de.ilianp.audiotranskript
 
 import android.content.Context
 import android.net.Uri
+import kotlinx.coroutines.CancellationException
 
 /** Raised for any user-facing transcription failure. */
 class WizperException(message: String) : Exception(message)
@@ -30,29 +31,45 @@ object WizperClient {
         val errors = mutableListOf<String>()
 
         if (openRouterApiKey.isNotBlank()) {
-            try {
-                return OpenRouterClient.transcribe(payload, openRouterApiKey, languageCode)
-            } catch (e: Exception) {
-                errors += "MAI-Transcribe-2 (OpenRouter) fehlgeschlagen: ${e.message}"
-            }
+            attempt("MAI-Transcribe-2 (OpenRouter)", errors) {
+                OpenRouterClient.transcribe(payload, openRouterApiKey, languageCode)
+            }?.let { return it }
         }
 
         if (groqApiKey.isNotBlank()) {
-            try {
-                return GroqClient.transcribe(payload, groqApiKey, languageCode)
-            } catch (e: Exception) {
-                errors += "Groq fehlgeschlagen: ${e.message}"
-            }
+            attempt("Groq", errors) {
+                GroqClient.transcribe(payload, groqApiKey, languageCode)
+            }?.let { return it }
         }
 
         if (sonioxApiKey.isNotBlank()) {
-            try {
-                return SonioxClient.transcribe(payload, sonioxApiKey, languageCode, onSonioxJob)
-            } catch (e: Exception) {
-                errors += "Soniox-Fallback fehlgeschlagen: ${e.message}"
-            }
+            attempt("Soniox-Fallback", errors) {
+                SonioxClient.transcribe(payload, sonioxApiKey, languageCode, onSonioxJob)
+            }?.let { return it }
         }
 
         throw WizperException(errors.joinToString("\n\n"))
+    }
+
+    /**
+     * Runs one provider, returning null once its failure has been recorded so the next one can
+     * take over.
+     *
+     * A cancellation is not such a failure and is rethrown: the blocking HTTP calls only notice
+     * that the job is gone once they return, and swallowing that here would walk the remaining
+     * providers, report "Abbrechen" as a transcription error, and let the abandoned run write
+     * its state over a newer one.
+     */
+    private suspend fun attempt(
+        label: String,
+        errors: MutableList<String>,
+        block: suspend () -> String,
+    ): String? = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        errors += "$label fehlgeschlagen: ${e.message}"
+        null
     }
 }

@@ -78,6 +78,36 @@ class OpenRouterClientTest {
     }
 
     @Test
+    fun `transcribe reports raw AAC by its MIME type, not its renamed extension`() = runTest {
+        // readAudio renames an AAC file to audio.m4a for Groq's sake, but the bytes are ADTS
+        // AAC - declaring them as an MP4 container would have OpenRouter decode the wrong thing.
+        server.enqueue(jsonResponse(200, """{"text":"Hallo"}"""))
+
+        OpenRouterClient.transcribe(
+            AudioPayload(byteArrayOf(1, 2, 3), "audio.m4a", "audio/aac"),
+            "key-1",
+            "",
+        )
+
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertEquals("aac", body.getJSONObject("input_audio").getString("format"))
+    }
+
+    @Test
+    fun `transcribe still trusts the extension for a real m4a`() = runTest {
+        server.enqueue(jsonResponse(200, """{"text":"Hallo"}"""))
+
+        OpenRouterClient.transcribe(
+            AudioPayload(byteArrayOf(1, 2, 3), "audio.m4a", "audio/mp4"),
+            "key-1",
+            "",
+        )
+
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertEquals("m4a", body.getJSONObject("input_audio").getString("format"))
+    }
+
+    @Test
     fun `transcribe surfaces the message from an HTTP error`() = runTest {
         server.enqueue(jsonResponse(402, """{"error":{"message":"Insufficient credits","code":402}}"""))
 
