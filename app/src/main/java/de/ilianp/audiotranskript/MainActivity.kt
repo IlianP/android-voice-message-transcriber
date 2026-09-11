@@ -9,6 +9,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -27,9 +32,12 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -83,6 +91,7 @@ fun AppScreen(sharedUri: Uri?) {
     val scope = rememberCoroutineScope()
     val settings = remember { Settings(context) }
 
+    var openRouterKey by remember { mutableStateOf(settings.openRouterApiKey) }
     var groqKey by remember { mutableStateOf(settings.groqApiKey) }
     var sonioxKey by remember { mutableStateOf(settings.sonioxApiKey) }
     var langCode by remember { mutableStateOf(settings.languageCode) }
@@ -96,8 +105,12 @@ fun AppScreen(sharedUri: Uri?) {
     var job by remember { mutableStateOf<Job?>(null) }
     var debugLog by remember { mutableStateOf(DebugLog.get(context)) }
 
-    val hasKey = groqKey.isNotBlank() || sonioxKey.isNotBlank()
+    val hasKey = openRouterKey.isNotBlank() || groqKey.isNotBlank() || sonioxKey.isNotBlank()
     val activeUri = sharedUri ?: pickedUri
+
+    // Keys are entered once, so the settings stay folded away - except on a fresh install, where
+    // there is nothing to transcribe with yet and the user has to get to them.
+    var settingsExpanded by remember { mutableStateOf(!hasKey) }
 
     fun startTranscription(uri: Uri) {
         if (running) return
@@ -107,7 +120,14 @@ fun AppScreen(sharedUri: Uri?) {
         elapsedSeconds = 0
         job = scope.launch {
             try {
-                result = WizperClient.transcribe(context, uri, groqKey, sonioxKey, langCode) { info ->
+                result = WizperClient.transcribe(
+                    context,
+                    uri,
+                    openRouterKey,
+                    groqKey,
+                    sonioxKey,
+                    langCode,
+                ) { info ->
                     DebugLog.addSonioxJob(context, info)
                     debugLog = DebugLog.get(context)
                 }
@@ -155,103 +175,227 @@ fun AppScreen(sharedUri: Uri?) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Audio-Transkript", style = MaterialTheme.typography.headlineSmall)
-
-        OutlinedTextField(
-            value = groqKey,
-            onValueChange = { groqKey = it; savedHint = false },
-            label = { Text("Groq API-Key") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        OutlinedTextField(
-            value = sonioxKey,
-            onValueChange = { sonioxKey = it; savedHint = false },
-            label = { Text("Soniox API-Key (Fallback, optional)") },
-            supportingText = {
-                Text("Greift nur, wenn Groq fehlschlägt. Audio wird kurz hochgeladen und direkt nach der Transkription wieder gelöscht.")
-            },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        LanguageDropdown(selectedCode = langCode, onSelect = { langCode = it; savedHint = false })
-
-        Button(
-            onClick = {
-                settings.groqApiKey = groqKey
-                settings.sonioxApiKey = sonioxKey
-                settings.languageCode = langCode
-                groqKey = settings.groqApiKey
-                sonioxKey = settings.sonioxApiKey
-                savedHint = true
-            },
-            modifier = Modifier.fillMaxWidth(),
+    Scaffold(
+        bottomBar = {
+            // Pinned to the bottom: the message stays playable however far the transcript below
+            // it has been scrolled, and the controls stay in reach of the thumb.
+            if (activeUri != null) MessagePlayerBar(uri = activeUri)
+        },
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Einstellungen speichern")
-        }
+            Text("Audio-Transkript", style = MaterialTheme.typography.headlineSmall)
 
-        if (savedHint) {
-            Text("Gespeichert.", style = MaterialTheme.typography.bodySmall)
-        }
-
-        OutlinedButton(
-            onClick = { picker.launch(arrayOf("audio/*")) },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Audiodatei auswählen")
-        }
-
-        if (activeUri != null) {
-            Spacer(Modifier.height(8.dp))
-            TranscriptionPanel(
-                running = running,
-                result = result,
-                error = error,
-                hasKey = hasKey,
-                elapsedSeconds = elapsedSeconds,
-                onStart = { startTranscription(activeUri) },
-                onCancel = { job?.cancel(); running = false },
-                onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
-                onShare = { result?.let { shareText(context, it) } },
+            SettingsSection(
+                expanded = settingsExpanded,
+                onToggle = { settingsExpanded = !settingsExpanded; savedHint = false },
+                summary = settingsSummary(openRouterKey, groqKey, sonioxKey, langCode),
+                openRouterKey = openRouterKey,
+                onOpenRouterKeyChange = { openRouterKey = it; savedHint = false },
+                groqKey = groqKey,
+                onGroqKeyChange = { groqKey = it; savedHint = false },
+                sonioxKey = sonioxKey,
+                onSonioxKeyChange = { sonioxKey = it; savedHint = false },
+                langCode = langCode,
+                onLangSelect = { langCode = it; savedHint = false },
+                savedHint = savedHint,
+                onSave = {
+                    settings.openRouterApiKey = openRouterKey
+                    settings.groqApiKey = groqKey
+                    settings.sonioxApiKey = sonioxKey
+                    settings.languageCode = langCode
+                    openRouterKey = settings.openRouterApiKey
+                    groqKey = settings.groqApiKey
+                    sonioxKey = settings.sonioxApiKey
+                    savedHint = true
+                    // Saved settings have served their purpose - give the screen back to the transcript.
+                    settingsExpanded = false
+                },
             )
-            // Listen to the message while reading the transcript.
-            MessagePlayerCard(uri = activeUri)
-        } else {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit \"Audio-Transkript\" – oder wähle oben eine Datei aus – um sie zu transkribieren.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
 
-        if (BuildConfig.DEBUG) {
-            Spacer(Modifier.height(8.dp))
-            DebugPanel(
-                log = debugLog,
-                onCopy = { clipboard.setText(AnnotatedString(debugLog)) },
-                onClear = { DebugLog.clear(context); debugLog = "" },
-            )
+            OutlinedButton(
+                onClick = { picker.launch(arrayOf("audio/*")) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Audiodatei auswählen")
+            }
+
+            if (activeUri != null) {
+                Spacer(Modifier.height(8.dp))
+                TranscriptionPanel(
+                    running = running,
+                    result = result,
+                    error = error,
+                    hasKey = hasKey,
+                    elapsedSeconds = elapsedSeconds,
+                    onStart = { startTranscription(activeUri) },
+                    onCancel = { job?.cancel(); running = false },
+                    onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
+                    onShare = { result?.let { shareText(context, it) } },
+                )
+            } else {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit \"Audio-Transkript\" – oder wähle oben eine Datei aus – um sie zu transkribieren.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+
+            if (BuildConfig.DEBUG) {
+                Spacer(Modifier.height(8.dp))
+                DebugPanel(
+                    log = debugLog,
+                    onCopy = { clipboard.setText(AnnotatedString(debugLog)) },
+                    onClear = { DebugLog.clear(context); debugLog = "" },
+                )
+            }
         }
     }
 }
+
+/**
+ * API keys and the language choice, folded behind a flat header.
+ *
+ * These are entered once and then barely touched, so they should not take up the top of the
+ * screen on every run - the transcript and the player are what the app is actually for.
+ */
+@Composable
+private fun SettingsSection(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    summary: String,
+    openRouterKey: String,
+    onOpenRouterKeyChange: (String) -> Unit,
+    groqKey: String,
+    onGroqKeyChange: (String) -> Unit,
+    sonioxKey: String,
+    onSonioxKeyChange: (String) -> Unit,
+    langCode: String,
+    onLangSelect: (String) -> Unit,
+    savedHint: Boolean,
+    onSave: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Einstellungen", style = MaterialTheme.typography.titleSmall)
+                if (!expanded) {
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) {
+                    "Einstellungen zuklappen"
+                } else {
+                    "Einstellungen aufklappen"
+                },
+            )
+        }
+
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                modifier = Modifier.padding(bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedTextField(
+                    value = openRouterKey,
+                    onValueChange = onOpenRouterKeyChange,
+                    label = { Text("OpenRouter API-Key") },
+                    supportingText = {
+                        Text("Primäres Modell: MAI-Transcribe-2 von Microsoft, rund 0,10 $ pro Stunde Audio.")
+                    },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                OutlinedTextField(
+                    value = groqKey,
+                    onValueChange = onGroqKeyChange,
+                    label = { Text("Groq API-Key (Fallback, optional)") },
+                    supportingText = {
+                        Text("Greift nur, wenn MAI-Transcribe-2 fehlschlägt.")
+                    },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                OutlinedTextField(
+                    value = sonioxKey,
+                    onValueChange = onSonioxKeyChange,
+                    label = { Text("Soniox API-Key (letzter Fallback, optional)") },
+                    supportingText = {
+                        Text("Greift nur, wenn auch Groq fehlschlägt. Audio wird kurz hochgeladen und direkt nach der Transkription wieder gelöscht.")
+                    },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                LanguageDropdown(selectedCode = langCode, onSelect = onLangSelect)
+
+                Button(onClick = onSave, modifier = Modifier.fillMaxWidth()) {
+                    Text("Einstellungen speichern")
+                }
+            }
+        }
+
+        // Sits outside the fold: saving collapses the section, and the confirmation still needs
+        // somewhere to show up.
+        if (savedHint) {
+            Text(
+                "Gespeichert.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
+
+        HorizontalDivider()
+    }
+}
+
+/** One line describing the folded settings: which provider runs, and in which language. */
+private fun settingsSummary(
+    openRouterKey: String,
+    groqKey: String,
+    sonioxKey: String,
+    langCode: String,
+): String {
+    val provider = when {
+        openRouterKey.isNotBlank() -> "MAI-Transcribe-2"
+        groqKey.isNotBlank() -> "Groq Whisper"
+        sonioxKey.isNotBlank() -> "Soniox"
+        else -> return "Kein API-Key gesetzt"
+    }
+    return "$provider · ${languageLabelFor(langCode)}"
+}
+
+private fun languageLabelFor(code: String): String =
+    LANGUAGE_OPTIONS.firstOrNull { it.code == code }?.label ?: LANGUAGE_OPTIONS.first().label
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LanguageDropdown(selectedCode: String, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    val selectedLabel = LANGUAGE_OPTIONS.firstOrNull { it.code == selectedCode }?.label
-        ?: LANGUAGE_OPTIONS.first().label
+    val selectedLabel = languageLabelFor(selectedCode)
 
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         OutlinedTextField(
@@ -329,7 +473,7 @@ private fun TranscriptionPanel(
 
                 else -> {
                     if (!hasKey) {
-                        Text("Bitte zuerst den API-Key eintragen und speichern.")
+                        Text("Bitte zuerst oben unter \"Einstellungen\" einen API-Key eintragen und speichern.")
                     }
                     Button(onClick = onStart, enabled = hasKey) { Text("Transkribieren") }
                 }

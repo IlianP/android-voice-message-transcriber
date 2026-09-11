@@ -28,6 +28,12 @@ class Settings(context: Context) {
         dropObsoleteFalKey(context, securePrefs)
     }
 
+    var openRouterApiKey: String
+        get() = prefs.getString(KEY_OPENROUTER, "") ?: ""
+        set(value) {
+            prefs.edit().putString(KEY_OPENROUTER, value.trim()).apply()
+        }
+
     var groqApiKey: String
         get() = prefs.getString(KEY_GROQ, "") ?: ""
         set(value) {
@@ -56,6 +62,7 @@ class Settings(context: Context) {
     companion object {
         private const val SECURE_FILE = "settings_secure"
         private const val LEGACY_FILE = "settings"
+        private const val KEY_OPENROUTER = "openrouter_api_key"
         private const val KEY_GROQ = "api_key"
         private const val KEY_SONIOX = "soniox_api_key"
         private const val KEY_LEGACY_FAL = "fal_api_key"

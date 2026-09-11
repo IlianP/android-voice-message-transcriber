@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Forward10
@@ -20,13 +21,14 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material3.Card
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -271,10 +273,15 @@ private fun formatTime(ms: Int): String {
 /**
  * A compact audio player for the shared voice message: a play/pause button, a seek bar
  * with elapsed/total time, and speed chips (1× … 2,5×) so you can listen while reading.
+ *
+ * Meant for a [androidx.compose.material3.Scaffold]'s `bottomBar`, so it stays put while the
+ * transcript scrolls behind it - no matter how long the transcript gets. It draws its own
+ * navigation-bar padding, because the app runs edge to edge on Android 15+ and the controls
+ * would otherwise sit underneath the gesture bar.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun MessagePlayerCard(uri: Uri, modifier: Modifier = Modifier) {
+fun MessagePlayerBar(uri: Uri, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
     val controller = remember(uri) {
@@ -293,92 +300,100 @@ fun MessagePlayerCard(uri: Uri, modifier: Modifier = Modifier) {
         }
     }
 
-    Card(modifier = modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Sprachnachricht anhören", style = MaterialTheme.typography.titleMedium)
+    Surface(modifier = modifier.fillMaxWidth(), tonalElevation = 3.dp) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Marks the bar off from the transcript scrolling behind it.
+            HorizontalDivider()
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                val atEnd = controller.durationMs > 0 && controller.positionMs >= controller.durationMs
-                IconButton(
-                    onClick = { controller.skip(-SKIP_MS) },
-                    enabled = controller.isPrepared,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Icon(Icons.Filled.Replay10, contentDescription = "10 Sekunden zurück")
-                }
-                FilledIconButton(
-                    onClick = { controller.togglePlayPause() },
-                    enabled = controller.isPrepared,
-                    modifier = Modifier.size(56.dp),
-                ) {
-                    val icon = when {
-                        controller.isPlaying -> Icons.Filled.Pause
-                        atEnd -> Icons.Filled.Replay
-                        else -> Icons.Filled.PlayArrow
-                    }
-                    val desc = when {
-                        controller.isPlaying -> "Pause"
-                        atEnd -> "Erneut abspielen"
-                        else -> "Abspielen"
-                    }
-                    Icon(icon, contentDescription = desc)
-                }
-                IconButton(
-                    onClick = { controller.skip(SKIP_MS) },
-                    enabled = controller.isPrepared,
-                ) {
-                    Icon(Icons.Filled.Forward10, contentDescription = "10 Sekunden vor")
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    val range = controller.durationMs.coerceAtLeast(1).toFloat()
-                    Slider(
-                        value = controller.positionMs.coerceIn(0, controller.durationMs).toFloat(),
-                        onValueChange = { controller.seekTo(it.roundToInt()) },
-                        valueRange = 0f..range,
-                        enabled = controller.isPrepared && controller.durationMs > 0,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                    val atEnd = controller.durationMs > 0 && controller.positionMs >= controller.durationMs
+                    IconButton(
+                        onClick = { controller.skip(-SKIP_MS) },
+                        enabled = controller.isPrepared,
                     ) {
-                        Text(formatTime(controller.positionMs), style = MaterialTheme.typography.labelSmall)
-                        Text(formatTime(controller.durationMs), style = MaterialTheme.typography.labelSmall)
+                        Icon(Icons.Filled.Replay10, contentDescription = "10 Sekunden zurück")
+                    }
+                    FilledIconButton(
+                        onClick = { controller.togglePlayPause() },
+                        enabled = controller.isPrepared,
+                        modifier = Modifier.size(56.dp),
+                    ) {
+                        val icon = when {
+                            controller.isPlaying -> Icons.Filled.Pause
+                            atEnd -> Icons.Filled.Replay
+                            else -> Icons.Filled.PlayArrow
+                        }
+                        val desc = when {
+                            controller.isPlaying -> "Pause"
+                            atEnd -> "Erneut abspielen"
+                            else -> "Abspielen"
+                        }
+                        Icon(icon, contentDescription = desc)
+                    }
+                    IconButton(
+                        onClick = { controller.skip(SKIP_MS) },
+                        enabled = controller.isPrepared,
+                    ) {
+                        Icon(Icons.Filled.Forward10, contentDescription = "10 Sekunden vor")
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        val range = controller.durationMs.coerceAtLeast(1).toFloat()
+                        Slider(
+                            value = controller.positionMs.coerceIn(0, controller.durationMs).toFloat(),
+                            onValueChange = { controller.seekTo(it.roundToInt()) },
+                            valueRange = 0f..range,
+                            enabled = controller.isPrepared && controller.durationMs > 0,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(formatTime(controller.positionMs), style = MaterialTheme.typography.labelSmall)
+                            Text(formatTime(controller.durationMs), style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
-            }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("Tempo", style = MaterialTheme.typography.labelLarge)
-                FlowRow(
-                    modifier = Modifier.weight(1f),
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    PlaybackSpeed.entries.forEach { option ->
-                        FilterChip(
-                            selected = controller.speed == option,
-                            onClick = {
-                                controller.changeSpeed(option)
-                                settings.playbackSpeedFactor = option.factor
-                            },
-                            label = { Text(option.label) },
-                        )
+                    Text("Tempo", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PlaybackSpeed.entries.forEach { option ->
+                            FilterChip(
+                                selected = controller.speed == option,
+                                onClick = {
+                                    controller.changeSpeed(option)
+                                    settings.playbackSpeedFactor = option.factor
+                                },
+                                label = { Text(option.label) },
+                            )
+                        }
                     }
                 }
-            }
 
-            controller.errorMessage?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                controller.errorMessage?.let {
+                    Text(
+                        it,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
     }
