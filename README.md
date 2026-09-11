@@ -25,6 +25,18 @@ und **parallel Anhören**.
 - Sprache wählbar: automatisch / Deutsch / Englisch.
 - API-Keys werden lokal in `SharedPreferences` gespeichert.
 
+## Aufbau des Bildschirms
+
+Keys trägt man einmal ein, danach geht es nur noch um Transkript und Player. Der Bildschirm ist
+entsprechend sortiert:
+
+1. **Einstellungen** – flache, zuklappbare Zeile ganz oben. Standardmäßig zugeklappt; sie zeigt
+   dann nur eine Zusammenfassung („MAI-Transcribe-2 · Deutsch"). Aufgeklappt startet sie nur,
+   wenn noch kein Key gesetzt ist, und klappt sich nach dem Speichern wieder weg.
+2. **Player** – direkt über dem Transkript, damit er seinen Platz behält und nicht mitwandert,
+   wenn darunter ein langes Transkript erscheint.
+3. **Transkript** – der eigentliche Inhalt, mit Kopieren / Teilen / Neu.
+
 ## Der Player (neu)
 
 `MessagePlayer.kt` kapselt einen `MediaPlayer` in `MessagePlayerController` und stellt den
@@ -37,7 +49,7 @@ geteilt wurde. Das Tempo wird über `MediaPlayer.playbackParams.setSpeed(...)` g
 
 ```
 app/src/main/java/de/ilianp/audiotranskript/
-├── MainActivity.kt      # UI (Compose): Einstellungen, Transkriptions-Panel, Player-Einbindung
+├── MainActivity.kt      # UI (Compose): zuklappbare Einstellungen, Player, Transkriptions-Panel
 ├── MessagePlayer.kt     # ▶️ Audio-Player mit Tempo 1×–2,5×  (neu)
 ├── WizperClient.kt      # Orchestrierung: OpenRouter, dann Groq, dann Soniox
 ├── OpenRouterClient.kt  # OpenRouter STT API (MAI-Transcribe-2)
