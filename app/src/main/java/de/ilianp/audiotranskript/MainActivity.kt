@@ -83,6 +83,7 @@ fun AppScreen(sharedUri: Uri?) {
     val scope = rememberCoroutineScope()
     val settings = remember { Settings(context) }
 
+    var openRouterKey by remember { mutableStateOf(settings.openRouterApiKey) }
     var groqKey by remember { mutableStateOf(settings.groqApiKey) }
     var sonioxKey by remember { mutableStateOf(settings.sonioxApiKey) }
     var langCode by remember { mutableStateOf(settings.languageCode) }
@@ -96,7 +97,7 @@ fun AppScreen(sharedUri: Uri?) {
     var job by remember { mutableStateOf<Job?>(null) }
     var debugLog by remember { mutableStateOf(DebugLog.get(context)) }
 
-    val hasKey = groqKey.isNotBlank() || sonioxKey.isNotBlank()
+    val hasKey = openRouterKey.isNotBlank() || groqKey.isNotBlank() || sonioxKey.isNotBlank()
     val activeUri = sharedUri ?: pickedUri
 
     fun startTranscription(uri: Uri) {
@@ -107,7 +108,14 @@ fun AppScreen(sharedUri: Uri?) {
         elapsedSeconds = 0
         job = scope.launch {
             try {
-                result = WizperClient.transcribe(context, uri, groqKey, sonioxKey, langCode) { info ->
+                result = WizperClient.transcribe(
+                    context,
+                    uri,
+                    openRouterKey,
+                    groqKey,
+                    sonioxKey,
+                    langCode,
+                ) { info ->
                     DebugLog.addSonioxJob(context, info)
                     debugLog = DebugLog.get(context)
                 }
@@ -165,9 +173,24 @@ fun AppScreen(sharedUri: Uri?) {
         Text("Audio-Transkript", style = MaterialTheme.typography.headlineSmall)
 
         OutlinedTextField(
+            value = openRouterKey,
+            onValueChange = { openRouterKey = it; savedHint = false },
+            label = { Text("OpenRouter API-Key") },
+            supportingText = {
+                Text("Primäres Modell: MAI-Transcribe-2 von Microsoft, rund 0,10 $ pro Stunde Audio.")
+            },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        OutlinedTextField(
             value = groqKey,
             onValueChange = { groqKey = it; savedHint = false },
-            label = { Text("Groq API-Key") },
+            label = { Text("Groq API-Key (Fallback, optional)") },
+            supportingText = {
+                Text("Greift nur, wenn MAI-Transcribe-2 fehlschlägt.")
+            },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
@@ -176,9 +199,9 @@ fun AppScreen(sharedUri: Uri?) {
         OutlinedTextField(
             value = sonioxKey,
             onValueChange = { sonioxKey = it; savedHint = false },
-            label = { Text("Soniox API-Key (Fallback, optional)") },
+            label = { Text("Soniox API-Key (letzter Fallback, optional)") },
             supportingText = {
-                Text("Greift nur, wenn Groq fehlschlägt. Audio wird kurz hochgeladen und direkt nach der Transkription wieder gelöscht.")
+                Text("Greift nur, wenn auch Groq fehlschlägt. Audio wird kurz hochgeladen und direkt nach der Transkription wieder gelöscht.")
             },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
@@ -189,9 +212,11 @@ fun AppScreen(sharedUri: Uri?) {
 
         Button(
             onClick = {
+                settings.openRouterApiKey = openRouterKey
                 settings.groqApiKey = groqKey
                 settings.sonioxApiKey = sonioxKey
                 settings.languageCode = langCode
+                openRouterKey = settings.openRouterApiKey
                 groqKey = settings.groqApiKey
                 sonioxKey = settings.sonioxApiKey
                 savedHint = true

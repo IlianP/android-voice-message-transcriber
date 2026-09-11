@@ -9,8 +9,12 @@ und **parallel Anhören**.
 
 - **Teilen → Transkribieren**: reagiert auf `ACTION_SEND` mit `audio/*`.
 - **Transkription** über:
-  - **Groq** (`whisper-large-v3-turbo`) – schnell, primär.
-  - **Soniox** (`stt-async-v5`) – optionaler Fallback (kurzer Upload, wird direkt nach dem
+  - **OpenRouter** (`microsoft/mai-transcribe-2`) – primär. Microsofts MAI-Transcribe-2 führt
+    den FLEURS-Benchmark an und kostet 0,10 $ pro Stunde Audio; OpenRouter reicht den
+    Listenpreis von Microsoft durch, spart aber den Azure-Account. Audio geht base64-kodiert
+    in einem einzigen Request raus, es bleibt nichts beim Anbieter liegen.
+  - **Groq** (`whisper-large-v3-turbo`) – optionaler Fallback.
+  - **Soniox** (`stt-async-v5`) – letzter Fallback (kurzer Upload, wird direkt nach dem
     Abruf des Texts wieder gelöscht; Soniox selbst löscht Uploads nie automatisch).
     Beim App-Start werden zusätzlich Reste abgeräumt, falls die App vorher abgestürzt ist –
     ausschließlich eigene Uploads, erkennbar an `client_reference_id`, und erst ab 10 Minuten
@@ -35,7 +39,8 @@ geteilt wurde. Das Tempo wird über `MediaPlayer.playbackParams.setSpeed(...)` g
 app/src/main/java/de/ilianp/audiotranskript/
 ├── MainActivity.kt      # UI (Compose): Einstellungen, Transkriptions-Panel, Player-Einbindung
 ├── MessagePlayer.kt     # ▶️ Audio-Player mit Tempo 1×–2,5×  (neu)
-├── WizperClient.kt      # Orchestrierung: Groq zuerst, dann Soniox-Fallback
+├── WizperClient.kt      # Orchestrierung: OpenRouter, dann Groq, dann Soniox
+├── OpenRouterClient.kt  # OpenRouter STT API (MAI-Transcribe-2)
 ├── GroqClient.kt        # Groq Whisper API
 ├── SonioxClient.kt      # Soniox Async API (Upload → Job → Poll → Ergebnis → Aufräumen)
 ├── AudioInput.kt        # Liest die geteilte Audiodatei + MIME-/Endungs-Erkennung
@@ -54,6 +59,10 @@ app/src/main/java/de/ilianp/audiotranskript/
 - Jetpack Compose (Material 3), OkHttp, Kotlin Coroutines
 
 ## Tests
+
+`app/src/test/.../OpenRouterClientTest.kt` deckt `OpenRouterClient` gegen einen `MockWebServer` ab:
+Request-Form (Modell, base64-Audio, Format-Mapping, Sprache), beide OpenRouter-Fehlerformen
+(HTTP-Fehler und `error`-Objekt mit HTTP 200) sowie leere und kaputte Antworten.
 
 `app/src/test/.../SonioxClientTest.kt` deckt `SonioxClient` gegen einen `MockWebServer` ab:
 Upload → Poll → Transkript → Aufräumen im Erfolgsfall, beide Soniox-Fehlerformen (HTTP-Fehler
