@@ -10,3 +10,8 @@
 local.properties
 /app/build
 /build
+
+# Signierung - darf niemals ins Repo
+keystore.properties
+*.jks
+*.keystore
