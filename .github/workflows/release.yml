@@ -2,9 +2,19 @@ name: Release-APK
 
 # Baut bei jedem Merge nach main ein signiertes Release-APK und veroeffentlicht
 # es als GitHub Release. Manuell ausloesbar ueber "Run workflow".
+#
+# paths-ignore verhindert Leerlauf-Releases: Aendert ein Push ausschliesslich
+# Markdown-Dateien oder Claude-Tooling (.claude/), fliesst das nicht in die
+# APK ein, also lohnt sich kein neuer Build. Aendert sich zusaetzlich auch nur
+# eine einzige andere Datei, greift der Ausschluss nicht und der Workflow
+# laeuft ganz normal - genau wie das noetig ist, wenn README oder CLAUDE.md
+# im selben Merge wie ein Code-Fix aktualisiert werden.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.claude/**'
   workflow_dispatch:
 
 permissions:
