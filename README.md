@@ -75,7 +75,8 @@ Ohne Zutun landet eine per `ACTION_SEND` gestartete Activity **im Task der teile
 App taucht dann in der Übersicht der laufenden Apps nicht als eigene Karte auf, sondern nur unter
 WhatsApp. `MainActivity` läuft deshalb mit `android:launchMode="singleTask"`: sie bekommt einen
 eigenen Task und damit eine eigene Karte, und eine zweite geteilte Nachricht erreicht dieselbe
-Instanz über `onNewIntent` (statt eine weitere zu starten). Die neue Nachricht ersetzt dort die
+Instanz über `onNewIntent` (statt eine weitere zu starten) – mitgezählt über eine `deliveryId`,
+damit auch dieselbe Nachricht zweimal hintereinander zwei Durchläufe auslöst. Die neue Nachricht ersetzt dort die
 angezeigte und wird sofort transkribiert; ein einfacher Start aus dem App-Drawer bringt dagegen die
 zuletzt gespeicherte Nachricht zurück.
 

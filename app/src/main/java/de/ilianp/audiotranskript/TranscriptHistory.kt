@@ -43,11 +43,11 @@ class TranscriptHistory(private val context: Context) {
     private val indexFile: File get() = File(dir, INDEX_NAME)
 
     /** The stored entries, newest first, with anything expired already swept off disk. */
-    fun entries(now: Long = System.currentTimeMillis()): List<HistoryEntry> {
+    fun entries(now: Long = System.currentTimeMillis()): List<HistoryEntry> = synchronized(LOCK) {
         val stored = read()
         val kept = prune(stored, now)
         if (kept != stored) write(kept)
-        return kept
+        kept
     }
 
     /**
@@ -60,7 +60,7 @@ class TranscriptHistory(private val context: Context) {
         transcript: String,
         payload: AudioPayload?,
         now: Long = System.currentTimeMillis(),
-    ): List<HistoryEntry> {
+    ): List<HistoryEntry> = synchronized(LOCK) {
         val hash = payload?.let { sha256(it.bytes) }
         val existing = entries(now)
         val previous = hash?.let { h -> existing.firstOrNull { it.audioHash == h } }
@@ -73,19 +73,22 @@ class TranscriptHistory(private val context: Context) {
         val entry = HistoryEntry(id, now, transcript, audioName, hash)
         val updated = prune(listOf(entry) + existing.filterNot { it.id == id }, now)
         write(updated)
-        return updated
+        updated
     }
 
     /** A `file://` URI for the stored audio, or null if this entry has none (any more). */
-    fun audioUri(entry: HistoryEntry): Uri? = entry.audioFileName
-        ?.let { File(dir, it) }
-        ?.takeIf { it.exists() }
-        ?.let { Uri.fromFile(it) }
+    fun audioUri(entry: HistoryEntry): Uri? = synchronized(LOCK) {
+        entry.audioFileName
+            ?.let { File(dir, it) }
+            ?.takeIf { it.exists() }
+            ?.let { Uri.fromFile(it) }
+    }
 
     /** Drops every entry and its audio. */
-    fun clear() {
+    fun clear() = synchronized(LOCK) {
         runCatching { dir.deleteRecursively() }
             .onFailure { Log.w(TAG, "Verlauf konnte nicht geloescht werden", it) }
+        Unit
     }
 
     // ---- storage ------------------------------------------------------------------------
@@ -156,6 +159,16 @@ class TranscriptHistory(private val context: Context) {
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     companion object {
+        /**
+         * Guards the whole read-prune-write cycle, across instances.
+         *
+         * The screen reads the history while a finished transcription writes to it, both off
+         * the main thread. Unserialized, a prune working from an older snapshot would delete
+         * the audio file that the write just put there, or overwrite its index - so every
+         * operation below takes this, and the index and the audio files stay in step.
+         */
+        private val LOCK = Any()
+
         /** How many transcriptions are kept before the oldest one drops out. */
         const val MAX_ENTRIES = 10
 

@@ -5,8 +5,11 @@ import android.graphics.Canvas
 import android.net.Uri
 import android.view.View
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -199,6 +202,57 @@ class ScreenshotTest {
         composeRule.onNodeWithText("gestern").assertExists()
         composeRule.onNodeWithText("vor 3 Tagen").assertExists()
         composeRule.onNodeWithText("Verlauf löschen").assertExists()
+    }
+
+    @Test
+    fun `a stored transcript stays readable when its audio is gone`() {
+        val history = TranscriptHistory(context)
+        history.add(longTranscript, payload(1))
+        val entry = history.entries().single()
+        // The copy can be missing for real: a failed write, or a file removed underneath us.
+        assertTrue("Audio-Kopie nicht loeschbar", File(history.audioUri(entry)!!.path!!).delete())
+
+        composeRule.setContent { AppScreen(sharedUri = null) }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Donnerstag", substring = true).assertExists()
+        composeRule.onNodeWithText("Audio nicht mehr vorhanden", substring = true).assertExists()
+        // Nothing left to play or to send to a provider, so neither control is offered.
+        composeRule.onAllNodesWithText("Tempo").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Neu").assertCountEquals(0)
+    }
+
+    @Test
+    fun `sharing the same message again starts a second run`() {
+        val uri = Uri.fromFile(audioFile)
+        ShadowMediaPlayer.addMediaInfo(
+            DataSource.toDataSource(context, uri),
+            ShadowMediaPlayer.MediaInfo(225_000, 0),
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(JSONObject().put("text", "Zweiter Durchlauf, gleiche Datei.").toString()),
+        )
+
+        // Same URI both times: only the delivery id tells the screen that this is a new share.
+        val delivery = mutableIntStateOf(1)
+        composeRule.setContent {
+            AppScreen(sharedUri = uri, shareDeliveryId = delivery.intValue)
+        }
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Donnerstag", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+
+        delivery.intValue = 2
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Zweiter Durchlauf", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithText("Zweiter Durchlauf", substring = true).assertExists()
     }
 
     /** Puts one finished transcription into the history, with playable audio behind it. */

@@ -75,15 +75,30 @@ class MainActivity : ComponentActivity() {
      * recents list - launched plainly, it would be stacked into the sharing app's task and
      * only ever show up under WhatsApp's card.
      */
-    private val sharedUri = mutableStateOf<Uri?>(null)
+    private val shared = mutableStateOf<SharedAudio?>(null)
+
+    private var shareCount = 0
+
+    /**
+     * A shared message together with the number of the delivery it arrived in.
+     *
+     * The counter is what makes the same message shared twice two separate events: state
+     * compares by equality, so a bare URI assigned a second time would look unchanged and
+     * the screen would sit on the old transcript instead of starting over.
+     */
+    private data class SharedAudio(val uri: Uri, val deliveryId: Int)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        sharedUri.value = extractSharedAudio(intent)
+        deliver(intent)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    AppScreen(sharedUri.value)
+                    val message = shared.value
+                    AppScreen(
+                        sharedUri = message?.uri,
+                        shareDeliveryId = message?.deliveryId ?: 0,
+                    )
                 }
             }
         }
@@ -92,9 +107,14 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // A plain launcher tap also lands here; it carries no message and must not wipe the
-        // one on screen.
-        extractSharedAudio(intent)?.let { sharedUri.value = it }
+        deliver(intent)
+    }
+
+    /** Takes the message out of [intent], if it carries one - a plain launcher tap does not,
+     *  and must not wipe what is on screen. */
+    private fun deliver(intent: Intent?) {
+        val uri = extractSharedAudio(intent) ?: return
+        shared.value = SharedAudio(uri, ++shareCount)
     }
 
     private fun extractSharedAudio(intent: Intent?): Uri? {
@@ -108,8 +128,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * [shareDeliveryId] rises with every share reaching the app, so that the same message shared
+ * twice in a row is still handled twice. It has no meaning of its own beyond being different.
+ */
 @Composable
-fun AppScreen(sharedUri: Uri?) {
+fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -211,7 +235,7 @@ fun AppScreen(sharedUri: Uri?) {
     // Keyed on the intent's message, not on Unit: a share arriving while the app is already
     // open (onNewIntent) replaces what is on screen and starts straight away, even if the
     // previous message is still being transcribed.
-    LaunchedEffect(sharedUri) {
+    LaunchedEffect(sharedUri, shareDeliveryId) {
         if (sharedUri != null) takeOver(sharedUri)
     }
 
@@ -322,7 +346,9 @@ fun AppScreen(sharedUri: Uri?) {
             }
 
             val uri = activeUri
-            if (uri != null) {
+            // Also shown without audio: an entry whose copy could not be written, or whose
+            // file is gone, still has its text - and that is the part worth reading.
+            if (uri != null || result != null) {
                 Spacer(Modifier.height(8.dp))
                 TranscriptionPanel(
                     running = running,
@@ -331,7 +357,8 @@ fun AppScreen(sharedUri: Uri?) {
                     hasKey = hasKey,
                     elapsedSeconds = elapsedSeconds,
                     restoredAt = restoredAt,
-                    onStart = { startTranscription(uri) },
+                    hasAudio = uri != null,
+                    onStart = { uri?.let { startTranscription(it) } },
                     onCancel = { job?.cancel(); running = false },
                     onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
                     onShare = { result?.let { shareText(context, it) } },
@@ -527,6 +554,7 @@ private fun TranscriptionPanel(
     hasKey: Boolean,
     elapsedSeconds: Int,
     restoredAt: Long?,
+    hasAudio: Boolean,
     onStart: () -> Unit,
     onCancel: () -> Unit,
     onCopy: () -> Unit,
@@ -554,14 +582,15 @@ private fun TranscriptionPanel(
                 error != null -> {
                     Text("Fehler", style = MaterialTheme.typography.titleMedium)
                     Text(error, color = MaterialTheme.colorScheme.error)
-                    Button(onClick = onStart) { Text("Erneut versuchen") }
+                    Button(onClick = onStart, enabled = hasAudio) { Text("Erneut versuchen") }
                 }
 
                 result != null -> {
                     Text("Transkription", style = MaterialTheme.typography.titleMedium)
                     if (restoredAt != null) {
                         Text(
-                            "Aus dem Verlauf · ${relativeTime(restoredAt)}",
+                            "Aus dem Verlauf · ${relativeTime(restoredAt)}" +
+                                if (!hasAudio) " · Audio nicht mehr vorhanden" else "",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -572,7 +601,7 @@ private fun TranscriptionPanel(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = onCopy) { Text("Kopieren") }
                         OutlinedButton(onClick = onShare) { Text("Teilen") }
-                        OutlinedButton(onClick = onStart) { Text("Neu") }
+                        if (hasAudio) OutlinedButton(onClick = onStart) { Text("Neu") }
                     }
                 }
 
@@ -580,7 +609,7 @@ private fun TranscriptionPanel(
                     if (!hasKey) {
                         Text("Bitte zuerst oben unter \"Einstellungen\" einen API-Key eintragen und speichern.")
                     }
-                    Button(onClick = onStart, enabled = hasKey) { Text("Transkribieren") }
+                    Button(onClick = onStart, enabled = hasKey && hasAudio) { Text("Transkribieren") }
                 }
             }
         }

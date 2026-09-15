@@ -124,6 +124,39 @@ class TranscriptHistoryTest {
     }
 
     @Test
+    fun `parallel writes do not lose entries or their audio`() {
+        // The screen reads the history while a finished transcription writes to it. Without a
+        // lock around read-prune-write, a prune working from an older snapshot deletes the
+        // audio the write just put there - or drops the entry altogether.
+        val writers = 8
+        val ready = java.util.concurrent.CountDownLatch(writers)
+        val start = java.util.concurrent.CountDownLatch(1)
+        val done = java.util.concurrent.CountDownLatch(writers)
+
+        repeat(writers) { i ->
+            Thread {
+                ready.countDown()
+                start.await()
+                history.add("Nachricht $i", payload(i.toByte()))
+                // A concurrent reader prunes as well, which is the other half of the race.
+                history.entries()
+                done.countDown()
+            }.start()
+        }
+
+        ready.await()
+        start.countDown()
+        assertTrue("Schreiber haengen", done.await(30, TimeUnit.SECONDS))
+
+        val entries = TranscriptHistory(context).entries()
+        assertEquals(writers, entries.size)
+        entries.forEach { entry ->
+            assertNotNull("Audio von '${entry.transcript}' fehlt", history.audioUri(entry))
+        }
+        assertEquals(writers, storedAudioFiles().size)
+    }
+
+    @Test
     fun `clearing removes the transcripts and the audio`() {
         history.add("weg damit", payload(1))
         history.clear()

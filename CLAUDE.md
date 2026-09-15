@@ -32,7 +32,10 @@ statt die Datei für die Kopie ein zweites Mal zu lesen.
 `MainActivity` läuft mit `launchMode="singleTask"`, damit die App eine eigene
 Karte in den „letzten Apps" bekommt statt im Task der teilenden App zu landen —
 zweite geteilte Nachrichten kommen dadurch über `onNewIntent` herein und müssen
-dort verarbeitet werden. Der Verlauf ist in `backup_rules.xml` /
+dort verarbeitet werden. Dabei wird nicht die URI allein in den State gelegt,
+sondern zusammen mit einem hochzählenden `deliveryId`: Compose-State vergleicht
+über `equals`, und dieselbe Nachricht zweimal geteilt sähe sonst wie „keine
+Änderung" aus und würde still ignoriert. Der Verlauf ist in `backup_rules.xml` /
 `data_extraction_rules.xml` vom Cloud-Backup ausgenommen.
 
 ## Build & Test
