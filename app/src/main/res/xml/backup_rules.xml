@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 11 und aelter (fullBackupContent). Der Verlauf enthaelt Transkripte und Kopien der
+    Sprachnachrichten - die bleiben auf dem Geraet und gehen nicht in ein Cloud-Backup.
+-->
+<full-backup-content>
+    <exclude domain="file" path="history" />
+</full-backup-content>

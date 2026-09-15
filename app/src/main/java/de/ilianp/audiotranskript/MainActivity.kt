@@ -54,23 +54,67 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+
+    /**
+     * The message currently shared into the app.
+     *
+     * Held as state instead of being read once, because the activity runs in `singleTask`
+     * mode: a second share reaches this very instance through [onNewIntent] rather than
+     * starting a new one. That launch mode is also what gives the app its own entry in the
+     * recents list - launched plainly, it would be stacked into the sharing app's task and
+     * only ever show up under WhatsApp's card.
+     */
+    private val shared = mutableStateOf<SharedAudio?>(null)
+
+    private var shareCount = 0
+
+    /**
+     * A shared message together with the number of the delivery it arrived in.
+     *
+     * The counter is what makes the same message shared twice two separate events: state
+     * compares by equality, so a bare URI assigned a second time would look unchanged and
+     * the screen would sit on the old transcript instead of starting over.
+     */
+    private data class SharedAudio(val uri: Uri, val deliveryId: Int)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val sharedUri = extractSharedAudio(intent)
+        deliver(intent)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    AppScreen(sharedUri)
+                    val message = shared.value
+                    AppScreen(
+                        sharedUri = message?.uri,
+                        shareDeliveryId = message?.deliveryId ?: 0,
+                    )
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        deliver(intent)
+    }
+
+    /** Takes the message out of [intent], if it carries one - a plain launcher tap does not,
+     *  and must not wipe what is on screen. */
+    private fun deliver(intent: Intent?) {
+        val uri = extractSharedAudio(intent) ?: return
+        shared.value = SharedAudio(uri, ++shareCount)
     }
 
     private fun extractSharedAudio(intent: Intent?): Uri? {
@@ -84,12 +128,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * [shareDeliveryId] rises with every share reaching the app, so that the same message shared
+ * twice in a row is still handled twice. It has no meaning of its own beyond being different.
+ */
 @Composable
-fun AppScreen(sharedUri: Uri?) {
+fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val settings = remember { Settings(context) }
+    val history = remember { TranscriptHistory(context) }
 
     var openRouterKey by remember { mutableStateOf(settings.openRouterApiKey) }
     var groqKey by remember { mutableStateOf(settings.groqApiKey) }
@@ -97,7 +146,6 @@ fun AppScreen(sharedUri: Uri?) {
     var langCode by remember { mutableStateOf(settings.languageCode) }
     var savedHint by remember { mutableStateOf(false) }
 
-    var pickedUri by remember { mutableStateOf<Uri?>(null) }
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -105,24 +153,44 @@ fun AppScreen(sharedUri: Uri?) {
     var job by remember { mutableStateOf<Job?>(null) }
     var debugLog by remember { mutableStateOf(DebugLog.get(context)) }
 
+    // What the player plays: the message just shared or picked, or the stored copy of an
+    // entry taken from the history.
+    var activeUri by remember { mutableStateOf<Uri?>(null) }
+    var entries by remember { mutableStateOf<List<HistoryEntry>>(emptyList()) }
+    var historyExpanded by remember { mutableStateOf(false) }
+
+    // Set while the transcript on screen comes from the history instead of this run, so the
+    // panel can say so rather than passing off an old message as a fresh one.
+    var restoredAt by remember { mutableStateOf<Long?>(null) }
+
     val hasKey = openRouterKey.isNotBlank() || groqKey.isNotBlank() || sonioxKey.isNotBlank()
-    val activeUri = sharedUri ?: pickedUri
 
     // Keys are entered once, so the settings stay folded away - except on a fresh install, where
     // there is nothing to transcribe with yet and the user has to get to them.
     var settingsExpanded by remember { mutableStateOf(!hasKey) }
+
+    /** Puts a stored transcription back on screen, audio included - no provider involved. */
+    fun showFromHistory(entry: HistoryEntry) {
+        job?.cancel()
+        running = false
+        activeUri = history.audioUri(entry)
+        result = entry.transcript
+        error = null
+        restoredAt = entry.createdAt
+    }
 
     fun startTranscription(uri: Uri) {
         if (running) return
         running = true
         result = null
         error = null
+        restoredAt = null
         elapsedSeconds = 0
         job = scope.launch {
             try {
-                result = WizperClient.transcribe(
-                    context,
-                    uri,
+                val payload = withContext(Dispatchers.IO) { readAudio(context, uri) }
+                val text = WizperClient.transcribe(
+                    payload,
                     openRouterKey,
                     groqKey,
                     sonioxKey,
@@ -131,27 +199,54 @@ fun AppScreen(sharedUri: Uri?) {
                     DebugLog.addSonioxJob(context, info)
                     debugLog = DebugLog.get(context)
                 }
+                result = text
+                // Stored right away, audio and all: from here on the message survives the app
+                // being swiped away, which the grant on a shared URI does not.
+                entries = withContext(Dispatchers.IO) { history.add(text, payload) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 error = e.message ?: "Unbekannter Fehler"
             } finally {
-                running = false
+                // Only a run that finished on its own owns this flag. A cancelled one lands
+                // here too, but by then a newer message may already be running, and clearing
+                // the flag would let the screen claim nothing is going on.
+                if (isActive) running = false
             }
         }
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            pickedUri = uri
-            result = null
-            error = null
-            if (hasKey) startTranscription(uri)
-        }
+    /** Hands the screen over to another message, dropping whatever was still running for the
+     *  previous one. */
+    fun takeOver(uri: Uri) {
+        job?.cancel()
+        running = false
+        activeUri = uri
+        result = null
+        error = null
+        restoredAt = null
+        if (hasKey) startTranscription(uri)
     }
 
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) takeOver(uri)
+    }
+
+    // Keyed on the intent's message, not on Unit: a share arriving while the app is already
+    // open (onNewIntent) replaces what is on screen and starts straight away, even if the
+    // previous message is still being transcribed.
+    LaunchedEffect(sharedUri, shareDeliveryId) {
+        if (sharedUri != null) takeOver(sharedUri)
+    }
+
+    // Opened from the launcher rather than from a share: bring the last transcription back,
+    // so the app is not simply blank after Android cleared it out of memory.
     LaunchedEffect(Unit) {
-        if (sharedUri != null && hasKey) startTranscription(sharedUri)
+        val stored = withContext(Dispatchers.IO) { history.entries() }
+        entries = stored
+        if (sharedUri == null && activeUri == null && result == null) {
+            stored.firstOrNull()?.let { showFromHistory(it) }
+        }
     }
 
     // Safety net: if a previous run was killed before it could clean up, the audio would sit on
@@ -179,7 +274,7 @@ fun AppScreen(sharedUri: Uri?) {
         bottomBar = {
             // Pinned to the bottom: the message stays playable however far the transcript below
             // it has been scrolled, and the controls stay in reach of the thumb.
-            if (activeUri != null) MessagePlayerBar(uri = activeUri)
+            activeUri?.let { MessagePlayerBar(uri = it) }
         },
     ) { innerPadding ->
         Column(
@@ -219,6 +314,30 @@ fun AppScreen(sharedUri: Uri?) {
                 },
             )
 
+            if (entries.isNotEmpty()) {
+                HistorySection(
+                    entries = entries,
+                    expanded = historyExpanded,
+                    onToggle = { historyExpanded = !historyExpanded },
+                    onSelect = { entry ->
+                        showFromHistory(entry)
+                        historyExpanded = false
+                    },
+                    onClear = {
+                        history.clear()
+                        entries = emptyList()
+                        historyExpanded = false
+                        // The stored audio goes with it, so a transcript that came from there
+                        // cannot stay on screen with a player pointing at a deleted file.
+                        if (restoredAt != null) {
+                            result = null
+                            activeUri = null
+                            restoredAt = null
+                        }
+                    },
+                )
+            }
+
             OutlinedButton(
                 onClick = { picker.launch(arrayOf("audio/*")) },
                 modifier = Modifier.fillMaxWidth(),
@@ -226,7 +345,10 @@ fun AppScreen(sharedUri: Uri?) {
                 Text("Audiodatei auswählen")
             }
 
-            if (activeUri != null) {
+            val uri = activeUri
+            // Also shown without audio: an entry whose copy could not be written, or whose
+            // file is gone, still has its text - and that is the part worth reading.
+            if (uri != null || result != null) {
                 Spacer(Modifier.height(8.dp))
                 TranscriptionPanel(
                     running = running,
@@ -234,7 +356,9 @@ fun AppScreen(sharedUri: Uri?) {
                     error = error,
                     hasKey = hasKey,
                     elapsedSeconds = elapsedSeconds,
-                    onStart = { startTranscription(activeUri) },
+                    restoredAt = restoredAt,
+                    hasAudio = uri != null,
+                    onStart = { uri?.let { startTranscription(it) } },
                     onCancel = { job?.cancel(); running = false },
                     onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
                     onShare = { result?.let { shareText(context, it) } },
@@ -429,6 +553,8 @@ private fun TranscriptionPanel(
     error: String?,
     hasKey: Boolean,
     elapsedSeconds: Int,
+    restoredAt: Long?,
+    hasAudio: Boolean,
     onStart: () -> Unit,
     onCancel: () -> Unit,
     onCopy: () -> Unit,
@@ -456,18 +582,26 @@ private fun TranscriptionPanel(
                 error != null -> {
                     Text("Fehler", style = MaterialTheme.typography.titleMedium)
                     Text(error, color = MaterialTheme.colorScheme.error)
-                    Button(onClick = onStart) { Text("Erneut versuchen") }
+                    Button(onClick = onStart, enabled = hasAudio) { Text("Erneut versuchen") }
                 }
 
                 result != null -> {
                     Text("Transkription", style = MaterialTheme.typography.titleMedium)
+                    if (restoredAt != null) {
+                        Text(
+                            "Aus dem Verlauf · ${relativeTime(restoredAt)}" +
+                                if (!hasAudio) " · Audio nicht mehr vorhanden" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     SelectionContainer {
                         Text(result)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = onCopy) { Text("Kopieren") }
                         OutlinedButton(onClick = onShare) { Text("Teilen") }
-                        OutlinedButton(onClick = onStart) { Text("Neu") }
+                        if (hasAudio) OutlinedButton(onClick = onStart) { Text("Neu") }
                     }
                 }
 
@@ -475,10 +609,106 @@ private fun TranscriptionPanel(
                     if (!hasKey) {
                         Text("Bitte zuerst oben unter \"Einstellungen\" einen API-Key eintragen und speichern.")
                     }
-                    Button(onClick = onStart, enabled = hasKey) { Text("Transkribieren") }
+                    Button(onClick = onStart, enabled = hasKey && hasAudio) { Text("Transkribieren") }
                 }
             }
         }
+    }
+}
+
+/**
+ * The last few transcriptions, folded away behind a one-line header.
+ *
+ * Tapping an entry puts it back on screen with its audio, straight from local storage - no
+ * second trip through a transcription API, and no cost.
+ */
+@Composable
+private fun HistorySection(
+    entries: List<HistoryEntry>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onSelect: (HistoryEntry) -> Unit,
+    onClear: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Verlauf (${entries.size})", style = MaterialTheme.typography.titleSmall)
+                if (!expanded) {
+                    Text(
+                        "Zuletzt: ${relativeTime(entries.first().createdAt)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Verlauf zuklappen" else "Verlauf aufklappen",
+            )
+        }
+
+        AnimatedVisibility(visible = expanded) {
+            Column(modifier = Modifier.padding(bottom = 12.dp)) {
+                entries.forEach { entry ->
+                    HorizontalDivider()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(entry) }
+                            .padding(vertical = 10.dp),
+                    ) {
+                        Text(
+                            relativeTime(entry.createdAt),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            entry.transcript,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                HorizontalDivider()
+
+                Text(
+                    "Bleibt nur auf diesem Gerät: die letzten ${TranscriptHistory.MAX_ENTRIES} " +
+                        "Nachrichten, höchstens sieben Tage lang.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                OutlinedButton(onClick = onClear, modifier = Modifier.padding(top = 8.dp)) {
+                    Text("Verlauf löschen")
+                }
+            }
+        }
+
+        HorizontalDivider()
+    }
+}
+
+/** Ages in German, independent of the device locale - the rest of the app speaks it too. */
+private fun relativeTime(timestamp: Long, now: Long = System.currentTimeMillis()): String {
+    val minutes = ((now - timestamp) / 60_000L).coerceAtLeast(0)
+    val hours = minutes / 60
+    val days = hours / 24
+    return when {
+        minutes < 1 -> "gerade eben"
+        minutes == 1L -> "vor 1 Minute"
+        minutes < 60 -> "vor $minutes Minuten"
+        hours == 1L -> "vor 1 Stunde"
+        hours < 24 -> "vor $hours Stunden"
+        days == 1L -> "gestern"
+        else -> "vor $days Tagen"
     }
 }
 

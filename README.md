@@ -22,6 +22,11 @@ und **parallel Anhören**.
 - **▶️ Nachricht anhören** direkt beim Lesen, mit einstellbarem Tempo **1× / 1,5× / 2× / 2,5×**,
   Play/Pause, Fortschrittsleiste und Zeitanzeige.
 - Transkript **kopieren** / **teilen**, Text ist markierbar.
+- **Verlauf**: die letzten 10 Transkriptionen bleiben samt Audio auf dem Gerät (höchstens
+  sieben Tage). Beim Öffnen aus dem App-Drawer ist die zuletzt transkribierte Nachricht
+  wieder da, ältere holt man über die Liste zurück – jeweils ohne erneuten API-Aufruf.
+- **Eigener Eintrag in der Übersicht der laufenden Apps** – auch wenn die App aus einer
+  Sprachnachricht heraus geöffnet wurde.
 - Sprache wählbar: automatisch / Deutsch / Englisch.
 - API-Keys werden lokal in `SharedPreferences` gespeichert.
 
@@ -33,14 +38,47 @@ entsprechend sortiert:
 1. **Einstellungen** – flache, zuklappbare Zeile ganz oben. Standardmäßig zugeklappt; sie zeigt
    dann nur eine Zusammenfassung („MAI-Transcribe-2 · Deutsch"). Aufgeklappt startet sie nur,
    wenn noch kein Key gesetzt ist, und klappt sich nach dem Speichern wieder weg.
-2. **Transkript** – der eigentliche Inhalt, mit Kopieren / Teilen / Neu. Scrollt frei.
-3. **Player** – als `bottomBar` des `Scaffold` fest am unteren Rand verankert. Er bleibt sichtbar
+2. **Verlauf** – ebenfalls zugeklappt, erscheint erst, wenn etwas gespeichert ist. Zeigt
+   zugeklappt nur das Alter der letzten Nachricht; aufgeklappt eine Liste, aus der sich jede
+   gespeicherte Nachricht mit Text und Audio zurückholen lässt.
+3. **Transkript** – der eigentliche Inhalt, mit Kopieren / Teilen / Neu. Scrollt frei.
+4. **Player** – als `bottomBar` des `Scaffold` fest am unteren Rand verankert. Er bleibt sichtbar
    und bedienbar, egal wie weit das Transkript darüber gescrollt ist, und liegt in Daumenreichweite.
    Die Leiste zeichnet ihr eigenes `navigationBarsPadding()`, weil die App unter Android 15
    zwangsweise edge-to-edge läuft.
 
-Der Player erscheint nur, wenn tatsächlich eine Audiodatei geteilt oder ausgewählt wurde – sonst
-gibt es keine bottomBar und der Inhalt bekommt die volle Höhe.
+Der Player erscheint nur, wenn tatsächlich eine Audiodatei geteilt, ausgewählt oder aus dem
+Verlauf geladen wurde – sonst gibt es keine bottomBar und der Inhalt bekommt die volle Höhe.
+
+## Verlauf und Wiedervorlage
+
+`TranscriptHistory.kt` legt jede fertige Transkription unter `filesDir/history/` ab: den Text in
+einer kleinen `index.json`, das Audio als Kopie daneben. Die Kopie ist nötig, weil die
+`content://`-URI einer geteilten WhatsApp-Nachricht nur eine befristete Leseberechtigung mitbringt,
+die mit dem Task verfällt und sich nicht dauerhaft übernehmen lässt (`ACTION_SEND` vergibt keine
+persistierbare Berechtigung). Ohne Kopie gäbe es beim Zurückholen also nichts mehr abzuspielen.
+Die Bytes liegen für den Upload ohnehin schon im Speicher, deshalb reicht `WizperClient` sie als
+`AudioPayload` durch, statt die Datei ein zweites Mal zu lesen.
+
+Aufgeräumt wird beim Lesen und Schreiben: höchstens `MAX_ENTRIES` (10) Einträge, nichts älter als
+`MAX_AGE_MS` (7 Tage), und Audiodateien, auf die kein Eintrag mehr zeigt, verschwinden mit. Wird
+dieselbe Nachricht erneut transkribiert, ersetzt das ihren Eintrag (erkannt am SHA-256 der Audio-
+Bytes), statt eine zweite Kopie anzulegen.
+
+Der Verlauf wird ausdrücklich **nicht** ins Cloud-Backup übernommen: `backup_rules.xml` und
+`data_extraction_rules.xml` schließen das Verzeichnis aus, sodass Transkripte und Sprachnachrichten
+das Gerät nicht verlassen.
+
+## Eigener Eintrag in den „letzten Apps"
+
+Ohne Zutun landet eine per `ACTION_SEND` gestartete Activity **im Task der teilenden App** – die
+App taucht dann in der Übersicht der laufenden Apps nicht als eigene Karte auf, sondern nur unter
+WhatsApp. `MainActivity` läuft deshalb mit `android:launchMode="singleTask"`: sie bekommt einen
+eigenen Task und damit eine eigene Karte, und eine zweite geteilte Nachricht erreicht dieselbe
+Instanz über `onNewIntent` (statt eine weitere zu starten) – mitgezählt über eine `deliveryId`,
+damit auch dieselbe Nachricht zweimal hintereinander zwei Durchläufe auslöst. Die neue Nachricht ersetzt dort die
+angezeigte und wird sofort transkribiert; ein einfacher Start aus dem App-Drawer bringt dagegen die
+zuletzt gespeicherte Nachricht zurück.
 
 ## Der Player (neu)
 
@@ -54,8 +92,9 @@ Sprachnachricht geteilt wurde. Das Tempo wird über `MediaPlayer.playbackParams.
 
 ```
 app/src/main/java/de/ilianp/audiotranskript/
-├── MainActivity.kt      # UI (Compose): Scaffold, zuklappbare Einstellungen, Transkriptions-Panel
+├── MainActivity.kt      # UI (Compose): Scaffold, zuklappbare Einstellungen, Verlauf, Transkriptions-Panel
 ├── MessagePlayer.kt     # ▶️ Audio-Player mit Tempo 1×–2,5×, fix am unteren Rand
+├── TranscriptHistory.kt # Verlauf: Transkripte + Audiokopien in filesDir, 10 Einträge / 7 Tage
 ├── WizperClient.kt      # Orchestrierung: OpenRouter, dann Groq, dann Soniox
 ├── OpenRouterClient.kt  # OpenRouter STT API (MAI-Transcribe-2)
 ├── GroqClient.kt        # Groq Whisper API
@@ -212,3 +251,9 @@ dort gelten deren Datenschutzbestimmungen. Soniox-Uploads löscht die App direkt
 dem Abruf des Transkripts wieder, Reste werden beim nächsten App-Start abgeräumt.
 API-Keys und Einstellungen bleiben lokal auf dem Gerät. Es findet keine Analyse,
 kein Tracking und keine Übertragung an Dritte darüber hinaus statt.
+
+Für den Verlauf speichert die App Transkripte **und Kopien der Sprachnachrichten** im privaten
+App-Verzeichnis (`filesDir/history/`), auf das andere Apps keinen Zugriff haben. Beides wird nach
+sieben Tagen automatisch gelöscht, spätestens aber wenn der elfte Eintrag dazukommt; „Verlauf
+löschen" räumt sofort alles weg. Vom Cloud-Backup und von der Geräteübertragung ist das
+Verzeichnis ausgenommen. Beim Deinstallieren verschwindet es mit den übrigen App-Daten.
