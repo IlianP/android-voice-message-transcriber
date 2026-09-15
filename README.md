@@ -138,6 +138,10 @@ demselben Schlüssel signiert und installieren sich als reguläres Update.
 
 ## Releases
 
+`.github/workflows/tests.yml` prüft jeden Pull Request mit `./gradlew test
+assembleDebug`, bevor etwas nach `main` geht – am PR steht dann ein grünes Häkchen
+oder ein rotes Kreuz.
+
 `.github/workflows/release.yml` baut bei jedem Push auf `main` ein signiertes
 Release-APK und veröffentlicht es unter einem Tag `v1.0.<Lauf-Nummer>`. Die
 Release-Notes werden aus den Commits seit dem letzten Tag erzeugt. Der Workflow

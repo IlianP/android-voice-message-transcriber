@@ -78,13 +78,23 @@ prüfen, bevor irgendwer das APK installiert. Ausführliche Anleitung inkl.
 Keystore-Erzeugung (auch ohne Rechner, über Termux) steht in der README unter
 „Release-Signierung einrichten".
 
+## Automatische Pruefungen
+
+`.github/workflows/tests.yml` laeuft bei **jedem Pull Request** (und von Hand
+ueber „Run workflow") und fuehrt `./gradlew test assembleDebug` aus — Unit-Tests
+inklusive der Robolectric-Screenshot-Tests, plus Debug-Build fuer Manifest- und
+Ressourcen-Fehler. Kein Keystore, kein Release; das bleibt `release.yml`
+vorbehalten, das **keine** Tests ausfuehrt. Ein Fehler laesst den PR rot werden,
+die Testberichte haengen dann als Artefakt am Lauf.
+
 ## Releases
 
 `.github/workflows/release.yml` baut bei jedem Push auf `main` automatisch ein
 signiertes APK und veröffentlicht es als GitHub Release (`v1.0.<Lauf-Nummer>`,
 Release-Notes automatisch generiert). Ein `paths-ignore` überspringt den Build,
-wenn ein Push ausschließlich Markdown-Dateien oder `.claude/**` ändert — reine
-Doku-/Tooling-Commits erzeugen so kein Leerlauf-Release.
+wenn ein Push ausschließlich Markdown-Dateien, `.claude/**` oder `.github/**`
+ändert — reine Doku-/Tooling-Commits erzeugen so kein Leerlauf-Release. Manuell
+geht der Workflow weiterhin über „Run workflow".
 
 Der `/release-check`-Skill (siehe `.claude/skills/release-check/`) prüft ein
 fertiges Release: Signatur kryptografisch verifiziert (nicht nur ausgelesen),
