@@ -2,12 +2,23 @@
 <!--
     Android 12+ (dataExtractionRules). Wie backup_rules.xml: der Verlauf mit Transkripten und
     Audiokopien bleibt lokal - weder im Cloud-Backup noch beim Geraetewechsel.
+
+    Dazu die beiden Key-Stores, aus denselben Gruenden wie dort: settings_secure.xml ist ohne
+    den Android Keystore nicht entschluesselbar, settings.xml koennte auf alten Installationen
+    noch einen Klartext-Key enthalten.
+
+    Auch beim device-transfer ausgeschlossen: Keystore-Schluessel sind an die Hardware gebunden
+    und werden bei der Direktuebertragung ebenso wenig mitgenommen wie beim Cloud-Backup.
 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="history" />
+        <exclude domain="sharedpref" path="settings_secure.xml" />
+        <exclude domain="sharedpref" path="settings.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="history" />
+        <exclude domain="sharedpref" path="settings_secure.xml" />
+        <exclude domain="sharedpref" path="settings.xml" />
     </device-transfer>
 </data-extraction-rules>
