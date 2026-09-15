@@ -1,0 +1,53 @@
+name: Tests
+
+# Prueft jeden Pull Request, bevor er nach main geht: Unit-Tests (inklusive der
+# Robolectric-Screenshot-Tests) und ein Debug-Build. Damit steht am PR ein
+# gruenes Haekchen oder ein rotes Kreuz, statt gar nichts.
+#
+# Bewusst ohne Keystore, ohne Release, ohne Veroeffentlichung - das bleibt
+# allein Sache von release.yml nach dem Merge.
+#
+# Bewusst auch ohne paths-ignore: ein reiner Doku-PR kostet so zwar drei
+# Minuten Rechenzeit, dafuer hat jeder PR ein eindeutiges Ergebnis. Ein
+# uebersprungener Lauf sieht sonst aus wie ein fehlender.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Wird waehrend eines laufenden Tests nachgeschoben, zaehlt nur der neue Stand.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Richtet Gradle ein und cacht Abhaengigkeiten zwischen den Laeufen.
+      - uses: gradle/actions/setup-gradle@v4
+
+      # test deckt Debug- und Release-Unit-Tests ab, assembleDebug faengt
+      # zusaetzlich Fehler in Manifest, Ressourcen und Packaging.
+      - name: Tests und Debug-Build
+        run: ./gradlew --no-daemon test assembleDebug
+
+      # Ohne das muesste man sich die fehlgeschlagene Zeile aus dem Log suchen.
+      - name: Testberichte sichern
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testberichte
+          path: app/build/reports/tests/
+          retention-days: 7
