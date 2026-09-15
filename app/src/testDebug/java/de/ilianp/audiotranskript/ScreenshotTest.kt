@@ -27,6 +27,7 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowMediaPlayer
 import org.robolectric.shadows.util.DataSource
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * Renders the real screen on the JVM and writes it out as PNGs, so layout changes can actually
@@ -90,12 +91,14 @@ class ScreenshotTest {
             openRouterApiKey = "sk-or-demo"
             languageCode = "de"
         }
+        TranscriptHistory(context).clear()
     }
 
     @After
     fun tearDown() {
         server.shutdown()
         audioFile.delete()
+        TranscriptHistory(context).clear()
         Settings(context).apply {
             openRouterApiKey = ""
             groqApiKey = ""
@@ -159,6 +162,68 @@ class ScreenshotTest {
             lastLine.bottom <= barTop,
         )
     }
+
+    @Test
+    fun `the last message is back after opening the app without a share`() {
+        val entry = storeMessage(longTranscript, marker = 1)
+
+        // No shared URI: this is the app being opened from the launcher, which used to show
+        // nothing but the empty state.
+        composeRule.setContent { AppScreen(sharedUri = null) }
+        composeRule.waitForIdle()
+
+        capture("06-verlauf-letzte-nachricht-wiederhergestellt")
+        composeRule.onNodeWithText("Donnerstag", substring = true).assertExists()
+        composeRule.onNodeWithText("Aus dem Verlauf", substring = true).assertExists()
+        // Played from the stored copy, so the player has to be up as well.
+        composeRule.onNodeWithText("Tempo").assertExists()
+        assertTrue("Keine Audio-Kopie gespeichert", entry != null)
+    }
+
+    @Test
+    fun `the history lists the recent messages`() {
+        val now = System.currentTimeMillis()
+        val history = TranscriptHistory(context)
+        history.add("Die aktuellste Nachricht: $paragraph", payload(1), now)
+        history.add("Von gestern: $paragraph", payload(2), now - TimeUnit.HOURS.toMillis(30))
+        history.add("Vom Wochenende: $paragraph", payload(3), now - TimeUnit.DAYS.toMillis(3))
+        registerPlayableAudio(history)
+
+        composeRule.setContent { AppScreen(sharedUri = null) }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Verlauf (3)").performClick()
+        composeRule.waitForIdle()
+
+        capture("07-verlauf-liste")
+        composeRule.onNodeWithText("gestern").assertExists()
+        composeRule.onNodeWithText("vor 3 Tagen").assertExists()
+        composeRule.onNodeWithText("Verlauf löschen").assertExists()
+    }
+
+    /** Puts one finished transcription into the history, with playable audio behind it. */
+    private fun storeMessage(transcript: String, marker: Byte): HistoryEntry? {
+        val history = TranscriptHistory(context)
+        history.add(transcript, payload(marker))
+        return registerPlayableAudio(history)
+    }
+
+    /** Teaches the shadow player about the stored copies, so the player bar renders enabled. */
+    private fun registerPlayableAudio(history: TranscriptHistory): HistoryEntry? {
+        var first: HistoryEntry? = null
+        history.entries().forEach { entry ->
+            val uri = history.audioUri(entry) ?: return@forEach
+            if (first == null) first = entry
+            ShadowMediaPlayer.addMediaInfo(
+                DataSource.toDataSource(context, uri),
+                ShadowMediaPlayer.MediaInfo(225_000, 0),
+            )
+        }
+        return first
+    }
+
+    private fun payload(marker: Byte) =
+        AudioPayload(ByteArray(64) { marker }, "audio.ogg", "audio/ogg")
 
     /** Shares a voice message and waits until its transcript is on screen. */
     private fun showTranscribedMessage() {

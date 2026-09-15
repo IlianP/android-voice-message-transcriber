@@ -23,11 +23,36 @@ object WizperClient {
         languageCode: String,
         onSonioxJob: (String) -> Unit = {},
     ): String {
-        if (openRouterApiKey.isBlank() && groqApiKey.isBlank() && sonioxApiKey.isBlank()) {
-            throw WizperException("Kein API-Key gesetzt. Bitte in den Einstellungen eintragen.")
-        }
+        // Checked before the file is touched, so a missing key reports itself as such rather
+        // than as whatever reading the audio happens to run into.
+        requireAnyKey(openRouterApiKey, groqApiKey, sonioxApiKey)
+        return transcribe(
+            readAudio(context, audioUri),
+            openRouterApiKey,
+            groqApiKey,
+            sonioxApiKey,
+            languageCode,
+            onSonioxJob,
+        )
+    }
 
-        val payload = readAudio(context, audioUri)
+    /**
+     * Transcribes audio that has already been read.
+     *
+     * The caller keeps the [AudioPayload] because the bytes are needed twice: once for the
+     * upload, and once for the copy [TranscriptHistory] keeps so the message stays playable
+     * after the shared URI's grant is gone.
+     */
+    suspend fun transcribe(
+        payload: AudioPayload,
+        openRouterApiKey: String,
+        groqApiKey: String,
+        sonioxApiKey: String,
+        languageCode: String,
+        onSonioxJob: (String) -> Unit = {},
+    ): String {
+        requireAnyKey(openRouterApiKey, groqApiKey, sonioxApiKey)
+
         val errors = mutableListOf<String>()
 
         if (openRouterApiKey.isNotBlank()) {
@@ -49,6 +74,12 @@ object WizperClient {
         }
 
         throw WizperException(errors.joinToString("\n\n"))
+    }
+
+    private fun requireAnyKey(openRouterApiKey: String, groqApiKey: String, sonioxApiKey: String) {
+        if (openRouterApiKey.isBlank() && groqApiKey.isBlank() && sonioxApiKey.isBlank()) {
+            throw WizperException("Kein API-Key gesetzt. Bitte in den Einstellungen eintragen.")
+        }
     }
 
     /**
