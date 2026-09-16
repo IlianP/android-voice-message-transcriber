@@ -2,7 +2,19 @@
 <!--
     Android 11 und aelter (fullBackupContent). Der Verlauf enthaelt Transkripte und Kopien der
     Sprachnachrichten - die bleiben auf dem Geraet und gehen nicht in ein Cloud-Backup.
+
+    settings_secure.xml enthaelt die API-Keys, verschluesselt mit einem Schluessel aus dem
+    Android Keystore. Der Keystore wird nie mitgesichert, ein wiederhergestelltes
+    settings_secure.xml ist also fuer niemanden lesbar - auch nicht fuer die App selbst. Statt
+    eine unbrauchbare Datei mitzuschleppen, bleibt sie draussen: nach einer Wiederherstellung
+    legt die App einen frischen, verschluesselten Store an und fragt die Keys neu ab.
+
+    settings.xml ist der alte Klartext-Store aus fruehen Versionen. Auf einem Geraet, das nie
+    migriert hat, stuende dort ein Groq-Key im Klartext - der gehoert erst recht nicht in ein
+    Cloud-Backup.
 -->
 <full-backup-content>
     <exclude domain="file" path="history" />
+    <exclude domain="sharedpref" path="settings_secure.xml" />
+    <exclude domain="sharedpref" path="settings.xml" />
 </full-backup-content>
