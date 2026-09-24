@@ -21,6 +21,7 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertTrue
@@ -90,6 +91,7 @@ class ScreenshotTest {
                 .setBody(JSONObject().put("text", longTranscript).toString()),
         )
         OpenRouterClient.baseUrl = server.url("/api/v1").toString().trimEnd('/')
+        SummaryClient.baseUrl = server.url("/api/v1").toString().trimEnd('/')
 
         // A real, openable file so the app's own audio reading path runs unchanged.
         audioFile = File.createTempFile("sprachnachricht", ".ogg").apply { writeBytes(ByteArray(64)) }
@@ -365,6 +367,76 @@ class ScreenshotTest {
         )
     }
 
+    @Test
+    fun `a long message offers a summary without making one`() {
+        showTranscribedMessage()
+
+        capture("10-zusammenfassung-angeboten")
+        composeRule.onNodeWithText("Lange Nachricht · 3:45").assertExists()
+        composeRule.onNodeWithText("Zusammenfassen").assertExists()
+        // Offered, not made: only the transcription went out.
+        assertTrue("Ungefragt zusammengefasst", server.requestCount == 1)
+    }
+
+    @Test
+    fun `a summary shows above the transcript and is kept in the history`() {
+        val summary = "• Termin am Donnerstag fällt aus\n• Vorschlag: Freitag früh\n• Unterlagen kamen per Mail"
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    JSONObject().put(
+                        "choices",
+                        JSONArray().put(JSONObject().put("message", JSONObject().put("content", summary))),
+                    ).toString(),
+                ),
+        )
+        showTranscribedMessage()
+
+        composeRule.onNodeWithText("Zusammenfassen").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Vorschlag: Freitag früh", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.waitForIdle()
+
+        capture("11-zusammenfassung-ueber-transkript")
+        composeRule.onAllNodesWithText("Lange Nachricht", substring = true).assertCountEquals(0)
+        val summaryTop = composeRule.onNodeWithText("Vorschlag: Freitag früh", substring = true)
+            .getUnclippedBoundsInRoot().top
+        val transcriptTop = composeRule.onNodeWithText("Donnerstag leider", substring = true)
+            .getUnclippedBoundsInRoot().top
+        assertTrue("Zusammenfassung steht nicht über dem Transkript", summaryTop < transcriptTop)
+
+        val stored = TranscriptHistory(context).entries().single()
+        assertTrue("Zusammenfassung nicht im Verlauf: ${stored.summary}", stored.summary == summary)
+    }
+
+    @Test
+    fun `a short message only gets a quiet summary button`() {
+        showTranscribedMessage(durationMs = 45_000)
+
+        composeRule.onNodeWithText("Zusammenfassung erstellen").assertExists()
+        composeRule.onAllNodesWithText("Lange Nachricht", substring = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun `no summary is offered without an OpenRouter key`() {
+        Settings(context).apply {
+            openRouterApiKey = ""
+            groqApiKey = "gsk-demo"
+        }
+        storeMessage(longTranscript, marker = 1)
+
+        composeRule.setContent { AppScreen(sharedUris = emptyList()) }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Donnerstag", substring = true).assertExists()
+        composeRule.onAllNodesWithText("Lange Nachricht", substring = true).assertCountEquals(0)
+        composeRule.onAllNodesWithText("Zusammenfassung erstellen").assertCountEquals(0)
+    }
+
     /** Puts one finished transcription into the history, with playable audio behind it. */
     private fun storeMessage(transcript: String, marker: Byte): HistoryEntry? {
         val history = TranscriptHistory(context)
@@ -390,12 +462,12 @@ class ScreenshotTest {
         AudioPayload(ByteArray(64) { marker }, "audio.ogg", "audio/ogg")
 
     /** Shares a voice message and waits until its transcript is on screen. */
-    private fun showTranscribedMessage() {
+    private fun showTranscribedMessage(durationMs: Int = 225_000) {
         val uri = Uri.fromFile(audioFile)
         // Give the shadow player a real duration, so the bar renders enabled controls.
         ShadowMediaPlayer.addMediaInfo(
             DataSource.toDataSource(context, uri),
-            ShadowMediaPlayer.MediaInfo(225_000, 0),
+            ShadowMediaPlayer.MediaInfo(durationMs, 0),
         )
 
         composeRule.setContent { AppScreen(sharedUris = listOf(uri)) }

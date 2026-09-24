@@ -20,6 +20,9 @@ import java.util.concurrent.TimeUnit
  * The file names are plain names inside the history directory, not paths, so the entry survives
  * the app's data directory moving (backup/restore, app cloning). The list is empty when the copy
  * could not be written - the text is still worth keeping on its own.
+ *
+ * [summary] is the summary made on request, if there is one - kept, so that opening the entry
+ * again does not pay for it a second time.
  */
 data class HistoryEntry(
     val id: String,
@@ -28,6 +31,7 @@ data class HistoryEntry(
     val audioFileNames: List<String>,
     val audioHash: String?,
     val segments: List<String> = listOf(transcript),
+    val summary: String? = null,
 )
 
 /**
@@ -100,6 +104,19 @@ class TranscriptHistory(private val context: Context) {
     }
 
     /**
+     * Attaches [summary] to the entry [id], and returns the resulting history. A no-op if the
+     * entry has gone in the meantime (pruned, or the history cleared while summarizing).
+     */
+    fun setSummary(id: String, summary: String, now: Long = System.currentTimeMillis()): List<HistoryEntry> =
+        synchronized(LOCK) {
+            val existing = entries(now)
+            if (existing.none { it.id == id }) return existing
+            val updated = existing.map { if (it.id == id) it.copy(summary = summary) else it }
+            write(updated)
+            updated
+        }
+
+    /**
      * `file://` URIs for the stored audio, one per message - or none at all if any of them is
      * missing, since a batch with a gap would no longer line up with its transcripts.
      */
@@ -169,6 +186,7 @@ class TranscriptHistory(private val context: Context) {
                 audioFileNames = audios,
                 audioHash = o.optString(FIELD_HASH).takeIf { it.isNotBlank() },
                 segments = segments,
+                summary = o.optString(FIELD_SUMMARY).takeIf { it.isNotBlank() },
             )
         }
     }.onFailure { Log.w(TAG, "Verlauf konnte nicht gelesen werden", it) }.getOrDefault(emptyList())
@@ -187,6 +205,7 @@ class TranscriptHistory(private val context: Context) {
                         .put(FIELD_HASH, entry.audioHash)
                         .apply {
                             if (entry.segments.size > 1) put(FIELD_SEGMENTS, JSONArray(entry.segments))
+                            entry.summary?.let { put(FIELD_SUMMARY, it) }
                         },
                 )
             }
@@ -237,5 +256,6 @@ class TranscriptHistory(private val context: Context) {
         private const val FIELD_AUDIOS = "audios"
         private const val FIELD_SEGMENTS = "segments"
         private const val FIELD_HASH = "audioHash"
+        private const val FIELD_SUMMARY = "summary"
     }
 }

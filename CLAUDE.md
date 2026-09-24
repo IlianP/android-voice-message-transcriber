@@ -55,6 +55,16 @@ spielt die Dateien als eine durchgehende Zeitleiste. Ein Stapel ist im Verlauf e
 (`audioFileNames`/`segments`); alte Einträge mit einzelnem `audio`-Feld werden weiter gelesen.
 Ideen für später stehen in `ROADMAP.md`.
 
+## Zusammenfassung
+
+`SummaryClient.kt` fasst ein Transkript über OpenRouter (`/chat/completions`) mit
+`deepseek/deepseek-v4.1-flash` zusammen – gewählt über die Benchmark-Heaven-API
+(`https://benchmarkheaven.com/api/dataset`, Doku im GitHub-Repo `fstandhartinger/model-market-comparison`,
+`API.md`), falls das Modell mal neu bewertet werden soll. Nur auf Tipp, nie automatisch; ab
+`SUGGEST_FROM_MS` (2 min, Dauer vom `MessagePlayerController`) wird sie als Karte angeboten. Der
+Request erzwingt `data_collection: deny` + `zdr: true`. Das Ergebnis landet per
+`TranscriptHistory.setSummary` im Verlaufseintrag; `add()` für dieselbe Nachricht verwirft es.
+
 ## Build & Test
 
 ```bash
@@ -64,7 +74,7 @@ Ideen für später stehen in `ROADMAP.md`.
 ./gradlew testDebugUnitTest --tests '*ScreenshotTest*'   # UI-Screenshots via Robolectric
 ```
 
-Alle Provider-Clients (OpenRouter, Groq, Soniox) haben `internal var baseUrl`, damit Tests sie gegen einen
+Alle Provider-Clients (OpenRouter, Groq, Soniox, Summary) haben `internal var baseUrl`, damit Tests sie gegen einen
 `MockWebServer` umbiegen können, statt echte Keys zu brauchen.
 
 Das Android SDK ist in einer frischen Cloud-Session nicht vorinstalliert und

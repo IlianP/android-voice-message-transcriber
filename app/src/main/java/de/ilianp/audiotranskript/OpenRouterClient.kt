@@ -105,7 +105,7 @@ object OpenRouterClient {
     }
 
     /** Pulls `error.message` out of an OpenRouter error body, falling back to [fallback]. */
-    private fun errorOf(raw: String, fallback: String): String = runCatching {
+    internal fun errorOf(raw: String, fallback: String): String = runCatching {
         JSONObject(raw).getJSONObject("error").getString("message")
     }.getOrDefault(fallback)
 }

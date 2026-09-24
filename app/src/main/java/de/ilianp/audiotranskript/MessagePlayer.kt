@@ -361,7 +361,7 @@ fun rememberMessagePlayer(uris: List<Uri>): MessagePlayerController? {
     return controller
 }
 
-private fun formatTime(ms: Int): String {
+internal fun formatTime(ms: Int): String {
     val totalSeconds = (ms / 1000.0).roundToInt()
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
