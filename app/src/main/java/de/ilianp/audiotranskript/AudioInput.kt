@@ -2,7 +2,9 @@ package de.ilianp.audiotranskript
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import java.util.Locale
 
@@ -70,7 +72,9 @@ fun readAudio(context: Context, uri: Uri): AudioPayload {
     val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
         ?: throw WizperException("Audio-Datei konnte nicht gelesen werden.")
 
-    val nameExt = queryDisplayName(resolver, uri)
+    // A file:// URI (history copies, queued messages) has no provider to ask for a display
+    // name, but its own name carries the extension just as well.
+    val nameExt = (queryDisplayName(resolver, uri) ?: uri.lastPathSegment)
         ?.substringAfterLast('.', "")
         ?.lowercase(Locale.ROOT)
         ?.takeIf { it in ALLOWED_EXTENSIONS }
@@ -86,8 +90,61 @@ fun readAudio(context: Context, uri: Uri): AudioPayload {
     return AudioPayload(bytes, "audio.$ext", cleanMime)
 }
 
+/**
+ * How much audio a batch may hold in total. All of it sits in memory until the transcripts are
+ * in (the history keeps a copy), so a batch without a limit could run the app out of heap before
+ * the first request. Voice messages come nowhere near it - at WhatsApp's bitrate this is hours
+ * of speech; it only stops someone from sharing a stack of long recordings in one go.
+ */
+const val MAX_BATCH_BYTES: Long = 50L * 1024 * 1024
+
+/**
+ * Reads every message of a batch, failing with a readable message as soon as the total passes
+ * [maxBytes] - before the next file is read, not after all of them are. A single message is not
+ * limited: that is no different from what the app always did.
+ */
+fun readBatch(context: Context, uris: List<Uri>, maxBytes: Long = MAX_BATCH_BYTES): List<AudioPayload> {
+    var total = 0L
+    return uris.map { uri ->
+        readAudio(context, uri).also { payload ->
+            total += payload.bytes.size
+            if (uris.size > 1 && total > maxBytes) {
+                throw WizperException(
+                    "Zu viel Audio auf einmal (mehr als ${maxBytes / (1024 * 1024)} MB). " +
+                        "Bitte in kleineren Gruppen transkribieren.",
+                )
+            }
+        }
+    }
+}
+
 private fun queryDisplayName(resolver: ContentResolver, uri: Uri): String? = runCatching {
     resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
         if (c.moveToFirst()) c.getString(0) else null
     }
 }.getOrNull()
+
+/**
+ * The audio URIs a share carries: one for [Intent.ACTION_SEND], several for
+ * [Intent.ACTION_SEND_MULTIPLE] (e.g. a few voice messages selected together). Empty for
+ * anything else, including a plain launcher start.
+ */
+fun sharedAudioUris(intent: Intent?): List<Uri> = when (intent?.action) {
+    Intent.ACTION_SEND -> listOfNotNull(
+        if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        },
+    )
+    Intent.ACTION_SEND_MULTIPLE -> (
+        if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+        }
+    ).orEmpty().filterNotNull()
+    else -> emptyList()
+}

@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Audio-Transkript</string>
+    <!-- Die beiden Einträge im Teilen-Dialog. -->
+    <string name="share_start">Transkript starten</string>
+    <string name="share_queue">Zwischenspeichern</string>
 </resources>

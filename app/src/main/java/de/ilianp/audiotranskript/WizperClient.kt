@@ -3,6 +3,12 @@ package de.ilianp.audiotranskript
 import android.content.Context
 import android.net.Uri
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Raised for any user-facing transcription failure. */
 class WizperException(message: String) : Exception(message)
@@ -75,6 +81,61 @@ object WizperClient {
 
         throw WizperException(errors.joinToString("\n\n"))
     }
+
+    /**
+     * Transcribes a batch of messages - several voice messages in a row from the same chat - and
+     * returns one transcript per message, in the order given.
+     *
+     * One request per message rather than one for stitched-together audio: the files may not
+     * even share a codec, and cutting audio on the device buys nothing the caller cannot get by
+     * joining the texts. The requests run side by side (at most [MAX_PARALLEL] at a time, to
+     * stay clear of provider rate limits), each walking the provider chain on its own. One
+     * message failing fails the batch, naming the message, and cancels the rest.
+     *
+     * [onProgress] reports how many messages are done so far.
+     */
+    suspend fun transcribeAll(
+        payloads: List<AudioPayload>,
+        openRouterApiKey: String,
+        groqApiKey: String,
+        sonioxApiKey: String,
+        languageCode: String,
+        onProgress: (done: Int) -> Unit = {},
+        onSonioxJob: (String) -> Unit = {},
+    ): List<String> {
+        requireAnyKey(openRouterApiKey, groqApiKey, sonioxApiKey)
+        val done = AtomicInteger(0)
+        val permits = Semaphore(MAX_PARALLEL)
+        return coroutineScope {
+            payloads.mapIndexed { index, payload ->
+                async {
+                    val text = permits.withPermit {
+                        try {
+                            transcribe(
+                                payload,
+                                openRouterApiKey,
+                                groqApiKey,
+                                sonioxApiKey,
+                                languageCode,
+                                onSonioxJob,
+                            )
+                        } catch (e: WizperException) {
+                            if (payloads.size == 1) throw e
+                            throw WizperException("Nachricht ${index + 1} von ${payloads.size}:\n${e.message}")
+                        }
+                    }
+                    onProgress(done.incrementAndGet())
+                    text
+                }
+            }.awaitAll()
+        }
+    }
+
+    /** Joins a batch's transcripts into the one text that is copied or shared. */
+    fun joinTranscripts(texts: List<String>): String = texts.joinToString("\n\n")
+
+    /** How many messages of a batch are sent to a provider at the same time. */
+    private const val MAX_PARALLEL = 3
 
     private fun requireAnyKey(openRouterApiKey: String, groqApiKey: String, sonioxApiKey: String) {
         if (openRouterApiKey.isBlank() && groqApiKey.isBlank() && sonioxApiKey.isBlank()) {

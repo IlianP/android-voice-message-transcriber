@@ -164,4 +164,43 @@ class TranscriptHistoryTest {
         assertTrue(history.entries().isEmpty())
         assertFalse(historyDir.exists())
     }
+
+    @Test
+    fun `a batch is one entry with one audio file per message`() {
+        history.add(listOf("Erste", "Zweite", "Dritte"), listOf(payload(1), payload(2), payload(3)))
+
+        val entry = TranscriptHistory(context).entries().single()
+        assertEquals(listOf("Erste", "Zweite", "Dritte"), entry.segments)
+        assertEquals("Erste\n\nZweite\n\nDritte", entry.transcript)
+        val uris = history.audioUris(entry)
+        assertEquals(3, uris.size)
+        // In the order given, so the player's messages line up with the transcript's.
+        assertEquals(listOf<Byte>(1, 2, 3), uris.map { File(it.path!!).readBytes().first() })
+    }
+
+    @Test
+    fun `a batch with a missing audio file plays none of it`() {
+        history.add(listOf("Erste", "Zweite"), listOf(payload(1), payload(2)))
+        val entry = history.entries().single()
+        File(history.audioUris(entry)[1].path!!).delete()
+
+        assertTrue(history.audioUris(entry).isEmpty())
+        // The text still is what it was.
+        assertEquals(listOf("Erste", "Zweite"), history.entries().single().segments)
+    }
+
+    @Test
+    fun `entries written before batches still load`() {
+        historyDir.mkdirs()
+        File(historyDir, "abc.ogg").writeBytes(ByteArray(8))
+        File(historyDir, "index.json").writeText(
+            """[{"id":"abc","createdAt":${System.currentTimeMillis()},""" +
+                """"transcript":"Alt","audio":"abc.ogg","audioHash":"x"}]""",
+        )
+
+        val entry = history.entries().single()
+        assertEquals(listOf("Alt"), entry.segments)
+        assertEquals(listOf("abc.ogg"), entry.audioFileNames)
+        assertNotNull(history.audioUri(entry))
+    }
 }

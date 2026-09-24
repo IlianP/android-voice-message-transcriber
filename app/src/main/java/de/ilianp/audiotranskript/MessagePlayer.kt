@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.PlaybackParams
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -64,14 +65,21 @@ private const val SKIP_MS = 10_000
 private const val DUCK_VOLUME = 0.2f
 
 /**
- * Holds a [MediaPlayer] and exposes its state to Compose. Speed is applied only while
- * playing (setting [MediaPlayer.setPlaybackParams] on a paused player can auto-resume on
- * some devices), and re-applied whenever playback starts.
+ * Plays one voice message, or a batch of several back to back, and exposes the state to Compose.
+ *
+ * A batch behaves like one long recording: [durationMs] and [positionMs] run across all messages,
+ * so the seek bar and the ±10 s buttons move over the whole conversation and cross from one
+ * message into the next. [currentIndex] tells which message is playing, and [playSegment] jumps
+ * to the start of one - that is what the labels in the transcript use. Behind it sits one
+ * [MediaPlayer] per message; when one finishes, the next one starts.
+ *
+ * Speed is applied only while playing (setting [MediaPlayer.setPlaybackParams] on a paused
+ * player can auto-resume on some devices), and re-applied whenever playback starts.
  */
 @Stable
 class MessagePlayerController(
     private val context: Context,
-    private val uri: Uri,
+    private val uris: List<Uri>,
     initialSpeed: PlaybackSpeed = PlaybackSpeed.X1,
 ) {
     var isPrepared by mutableStateOf(false)
@@ -87,7 +95,20 @@ class MessagePlayerController(
     var errorMessage by mutableStateOf<String?>(null)
         private set
 
-    private var player: MediaPlayer? = null
+    /** The message playing (or paused) right now, 0-based. */
+    var currentIndex by mutableStateOf(0)
+        private set
+
+    val segmentCount: Int get() = uris.size
+
+    private val players = mutableListOf<MediaPlayer>()
+    private val durations = IntArray(uris.size)
+    private var preparedCount = 0
+
+    /** Where each message starts on the shared timeline, known once all are prepared. */
+    private var segmentStarts = IntArray(uris.size)
+
+    private val current: MediaPlayer? get() = players.getOrNull(currentIndex)
 
     private val audioManager =
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -120,10 +141,10 @@ class MessagePlayerController(
                 pausePlayback()
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                player?.setVolume(DUCK_VOLUME, DUCK_VOLUME)
+                current?.setVolume(DUCK_VOLUME, DUCK_VOLUME)
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
-                player?.setVolume(1f, 1f)
+                current?.setVolume(1f, 1f)
                 if (resumeOnFocusGain) {
                     resumeOnFocusGain = false
                     startPlayback()
@@ -140,73 +161,91 @@ class MessagePlayerController(
         .build()
 
     fun prepare() {
-        if (player != null) return
-        val mp = MediaPlayer()
-        mp.setAudioAttributes(audioAttributes)
-        try {
-            mp.setDataSource(context, uri)
-        } catch (e: Exception) {
-            errorMessage = e.message ?: "Wiedergabe nicht möglich."
-            mp.release()
-            return
+        if (players.isNotEmpty() || uris.isEmpty()) return
+        uris.forEachIndexed { index, uri ->
+            val mp = MediaPlayer()
+            mp.setAudioAttributes(audioAttributes)
+            try {
+                mp.setDataSource(context, uri)
+            } catch (e: Exception) {
+                errorMessage = e.message ?: "Wiedergabe nicht möglich."
+                mp.release()
+                players.forEach { it.release() }
+                players.clear()
+                return
+            }
+            // These lambdas take a MediaPlayer parameter (not a receiver), so property
+            // assignments below resolve to this controller, not to the MediaPlayer.
+            mp.setOnPreparedListener { prepared ->
+                durations[index] = prepared.duration.coerceAtLeast(0)
+                preparedCount += 1
+                // The shared timeline needs every duration, so the controls wait for all.
+                if (preparedCount == uris.size) {
+                    var offset = 0
+                    durations.forEachIndexed { i, d ->
+                        segmentStarts[i] = offset
+                        offset += d
+                    }
+                    durationMs = offset
+                    isPrepared = true
+                }
+            }
+            mp.setOnCompletionListener { onSegmentCompleted(index) }
+            mp.setOnErrorListener { _, what, extra ->
+                errorMessage = "Wiedergabe nicht möglich (Code $what/$extra)."
+                isPlaying = false
+                abandonAudioFocus()
+                true
+            }
+            players += mp
         }
-        // These lambdas take a MediaPlayer parameter (not a receiver), so property
-        // assignments below resolve to this controller, not to the MediaPlayer.
-        mp.setOnPreparedListener { prepared ->
-            isPrepared = true
-            durationMs = prepared.duration.coerceAtLeast(0)
-        }
-        mp.setOnCompletionListener {
-            isPlaying = false
-            positionMs = durationMs
-            abandonAudioFocus()
-        }
-        mp.setOnErrorListener { _, what, extra ->
-            errorMessage = "Wiedergabe nicht möglich (Code $what/$extra)."
-            isPlaying = false
-            abandonAudioFocus()
-            true
-        }
-        player = mp
-        mp.prepareAsync()
+        players.forEach { it.prepareAsync() }
     }
 
     fun togglePlayPause() {
-        val mp = player ?: return
+        val mp = current ?: return
         if (!isPrepared) return
         if (mp.isPlaying) {
             pausePlayback()
             abandonAudioFocus()
         } else {
-            if (durationMs > 0 && positionMs >= durationMs) {
-                mp.seekTo(0)
-                positionMs = 0
-            }
-            if (requestAudioFocus()) {
-                errorMessage = null
-                startPlayback()
-            } else {
-                errorMessage =
-                    "Wiedergabe momentan nicht möglich – Audio wird gerade anderweitig genutzt."
-            }
+            if (durationMs > 0 && positionMs >= durationMs) seekTo(0)
+            play()
         }
+    }
+
+    /** Jumps to the start of message [index] and plays from there. */
+    fun playSegment(index: Int) {
+        if (!isPrepared || index !in uris.indices) return
+        seekTo(segmentStarts[index])
+        if (!isPlaying) play()
     }
 
     fun changeSpeed(newSpeed: PlaybackSpeed) {
         speed = newSpeed
-        val mp = player ?: return
+        val mp = current ?: return
         if (isPlaying) applySpeed(mp)
     }
 
+    /** Seeks on the shared timeline, switching to whichever message holds [ms]. */
     fun seekTo(ms: Int) {
-        val mp = player ?: return
-        if (!isPrepared) return
+        if (!isPrepared || players.isEmpty()) return
         val clamped = ms.coerceIn(0, durationMs)
-        mp.seekTo(clamped)
+        val index = segmentStarts.indexOfLast { it <= clamped }.coerceAtLeast(0)
+        val local = (clamped - segmentStarts[index]).coerceIn(0, durations[index])
+        if (index != currentIndex) {
+            val wasPlaying = isPlaying
+            current?.let { if (it.isPlaying) it.pause() }
+            currentIndex = index
+            players[index].seekTo(local)
+            if (wasPlaying) startPlayback()
+        } else {
+            players[index].seekTo(local)
+        }
         positionMs = clamped
     }
 
-    /** Seeks [deltaMs] relative to the current position (clamped to the clip bounds). */
+    /** Seeks [deltaMs] relative to the current position (clamped to the timeline's bounds). */
     fun skip(deltaMs: Int) {
         if (!isPrepared) return
         seekTo(positionMs + deltaMs)
@@ -214,20 +253,45 @@ class MessagePlayerController(
 
     /** Called periodically while playing to keep the progress bar in sync. */
     fun syncPosition() {
-        val mp = player ?: return
-        if (isPlaying && mp.isPlaying) positionMs = mp.currentPosition
+        val mp = current ?: return
+        if (isPlaying && mp.isPlaying) positionMs = segmentStarts[currentIndex] + mp.currentPosition
     }
 
     fun release() {
         abandonAudioFocus()
-        player?.release()
-        player = null
+        players.forEach { it.release() }
+        players.clear()
         isPlaying = false
         isPrepared = false
     }
 
+    private fun onSegmentCompleted(index: Int) {
+        // A message that was left mid-way by a seek can still report in; only the playing one counts.
+        if (index != currentIndex) return
+        if (index < players.lastIndex) {
+            currentIndex = index + 1
+            players[currentIndex].seekTo(0)
+            positionMs = segmentStarts[currentIndex]
+            startPlayback()
+        } else {
+            isPlaying = false
+            positionMs = durationMs
+            abandonAudioFocus()
+        }
+    }
+
+    private fun play() {
+        if (requestAudioFocus()) {
+            errorMessage = null
+            startPlayback()
+        } else {
+            errorMessage =
+                "Wiedergabe momentan nicht möglich – Audio wird gerade anderweitig genutzt."
+        }
+    }
+
     private fun startPlayback() {
-        val mp = player ?: return
+        val mp = current ?: return
         applySpeed(mp)
         mp.setVolume(1f, 1f)
         mp.start()
@@ -235,7 +299,7 @@ class MessagePlayerController(
     }
 
     private fun pausePlayback() {
-        val mp = player ?: return
+        val mp = current ?: return
         if (mp.isPlaying) mp.pause()
         isPlaying = false
     }
@@ -256,11 +320,45 @@ class MessagePlayerController(
 
     private fun applySpeed(mp: MediaPlayer) {
         try {
-            mp.playbackParams = mp.playbackParams.setSpeed(speed.factor)
+            // Null only where no real player sits behind it (Robolectric); fresh params do there.
+            mp.playbackParams = (mp.playbackParams ?: PlaybackParams()).setSpeed(speed.factor)
         } catch (_: IllegalStateException) {
             // Player not in a valid state for playback params; ignore.
         }
     }
+}
+
+/**
+ * A player for [uris], prepared while on screen and released when it leaves or the audio
+ * changes. Null when there is nothing to play.
+ *
+ * Owned by the screen rather than by [MessagePlayerBar], because the transcript needs it too:
+ * its per-message labels jump the player to that message.
+ */
+@Composable
+fun rememberMessagePlayer(uris: List<Uri>): MessagePlayerController? {
+    val context = LocalContext.current
+    val controller = remember(uris) {
+        if (uris.isEmpty()) {
+            null
+        } else {
+            val speed = PlaybackSpeed.fromFactor(Settings(context).playbackSpeedFactor)
+            MessagePlayerController(context, uris, speed)
+        }
+    }
+
+    DisposableEffect(controller) {
+        controller?.prepare()
+        onDispose { controller?.release() }
+    }
+
+    LaunchedEffect(controller, controller?.isPlaying) {
+        while (controller != null && controller.isPlaying) {
+            controller.syncPosition()
+            delay(100)
+        }
+    }
+    return controller
 }
 
 private fun formatTime(ms: Int): String {
@@ -273,6 +371,7 @@ private fun formatTime(ms: Int): String {
 /**
  * A compact audio player for the shared voice message: a play/pause button, a seek bar
  * with elapsed/total time, and speed chips (1× … 2,5×) so you can listen while reading.
+ * For a batch of messages the bar spans all of them, and says which one is playing.
  *
  * Meant for a [androidx.compose.material3.Scaffold]'s `bottomBar`, so it stays put while the
  * transcript scrolls behind it - no matter how long the transcript gets. It draws its own
@@ -281,24 +380,9 @@ private fun formatTime(ms: Int): String {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun MessagePlayerBar(uri: Uri, modifier: Modifier = Modifier) {
+fun MessagePlayerBar(controller: MessagePlayerController, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
-    val controller = remember(uri) {
-        MessagePlayerController(context, uri, PlaybackSpeed.fromFactor(settings.playbackSpeedFactor))
-    }
-
-    DisposableEffect(uri) {
-        controller.prepare()
-        onDispose { controller.release() }
-    }
-
-    LaunchedEffect(controller.isPlaying) {
-        while (controller.isPlaying) {
-            controller.syncPosition()
-            delay(100)
-        }
-    }
 
     Surface(modifier = modifier.fillMaxWidth(), tonalElevation = 3.dp) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -360,6 +444,12 @@ fun MessagePlayerBar(uri: Uri, modifier: Modifier = Modifier) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text(formatTime(controller.positionMs), style = MaterialTheme.typography.labelSmall)
+                            if (controller.segmentCount > 1) {
+                                Text(
+                                    "Nachricht ${controller.currentIndex + 1} von ${controller.segmentCount}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
                             Text(formatTime(controller.durationMs), style = MaterialTheme.typography.labelSmall)
                         }
                     }
