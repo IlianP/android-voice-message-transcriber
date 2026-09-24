@@ -60,7 +60,7 @@ Ideen für später stehen in `ROADMAP.md`.
 ./gradlew testDebugUnitTest --tests '*ScreenshotTest*'   # UI-Screenshots via Robolectric
 ```
 
-Alle Provider-Clients haben `internal var baseUrl`, damit Tests sie gegen einen
+Alle Provider-Clients (OpenRouter, Groq, Soniox) haben `internal var baseUrl`, damit Tests sie gegen einen
 `MockWebServer` umbiegen können, statt echte Keys zu brauchen.
 
 Das Android SDK ist in einer frischen Cloud-Session nicht vorinstalliert und

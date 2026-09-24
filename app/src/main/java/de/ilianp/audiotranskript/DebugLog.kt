@@ -16,6 +16,11 @@ object DebugLog {
     private const val MAX_ENTRIES = 20
     private val TS = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
 
+    /**
+     * Synchronized because a batch can have several messages at Soniox at once: this reads the
+     * log and writes it back, and two of those interleaved would drop one of the entries.
+     */
+    @Synchronized
     fun addSonioxJob(context: Context, info: String) {
         if (!BuildConfig.DEBUG) return
         val now = TS.format(Date())

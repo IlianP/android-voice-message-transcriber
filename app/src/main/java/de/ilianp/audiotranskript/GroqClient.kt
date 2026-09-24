@@ -12,7 +12,8 @@ import java.util.concurrent.TimeUnit
 
 /** Transcribes audio via Groq's OpenAI-compatible Whisper endpoint. */
 object GroqClient {
-    private const val ENDPOINT = "https://api.groq.com/openai/v1/audio/transcriptions"
+    /** Overridable only so tests can point at a [okhttp3.mockwebserver.MockWebServer] instead. */
+    internal var baseUrl = "https://api.groq.com/openai/v1"
     private const val MODEL = "whisper-large-v3-turbo"
 
     private val http = OkHttpClient.Builder()
@@ -40,7 +41,7 @@ object GroqClient {
             .build()
 
         val request = Request.Builder()
-            .url(ENDPOINT)
+            .url("$baseUrl/audio/transcriptions")
             .addHeader("Authorization", "Bearer $apiKey")
             .post(body)
             .build()

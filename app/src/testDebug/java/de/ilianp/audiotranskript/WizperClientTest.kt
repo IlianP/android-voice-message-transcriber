@@ -41,6 +41,7 @@ class WizperClientTest {
         server = MockWebServer()
         server.start()
         OpenRouterClient.baseUrl = server.url("/api/v1").toString().trimEnd('/')
+        GroqClient.baseUrl = server.url("/groq").toString().trimEnd('/')
         audioFile = File.createTempFile("nachricht", ".ogg").apply { writeBytes(ByteArray(32)) }
     }
 
@@ -125,6 +126,45 @@ class WizperClientTest {
         assertTrue("Kein WizperException: $thrown", thrown is WizperException)
         assertTrue(thrown!!.message!!, thrown.message!!.startsWith("Nachricht 2 von 3"))
     }
+
+    @Test
+    fun `each message of a batch falls back to the next provider on its own`() = runBlocking {
+        // OpenRouter fails only message 2; Groq has to step in for that one alone.
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.path.orEmpty()
+                val raw = request.body.readByteArray()
+                val response = if (path.startsWith("/groq/")) {
+                    // Multipart upload: the audio bytes sit in the body as they are.
+                    val marker = if (raw.contains(ByteArray(16) { 2 })) 2 else 0
+                    MockResponse().setBody(JSONObject().put("text", "Groq $marker").toString())
+                } else {
+                    val body = JSONObject(String(raw))
+                    val marker = Base64.getDecoder()
+                        .decode(body.getJSONObject("input_audio").getString("data")).first()
+                    if (marker == 2.toByte()) {
+                        MockResponse().setResponseCode(503).setBody("ueberlastet")
+                    } else {
+                        MockResponse().setBody(JSONObject().put("text", "OpenRouter $marker").toString())
+                    }
+                }
+                return response.setHeader("Content-Type", "application/json")
+            }
+        }
+
+        val texts = WizperClient.transcribeAll(
+            listOf(payload(1), payload(2), payload(3)),
+            openRouterApiKey = "sk-or-test",
+            groqApiKey = "gsk-test",
+            sonioxApiKey = "",
+            languageCode = "de",
+        )
+
+        assertEquals(listOf("OpenRouter 1", "Groq 2", "OpenRouter 3"), texts)
+    }
+
+    private fun ByteArray.contains(part: ByteArray): Boolean =
+        (0..size - part.size).any { start -> part.indices.all { this[start + it] == part[it] } }
 
     private fun payload(marker: Byte) = AudioPayload(ByteArray(16) { marker }, "audio.ogg", "audio/ogg")
 
