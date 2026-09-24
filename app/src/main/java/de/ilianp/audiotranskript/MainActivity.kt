@@ -3,7 +3,6 @@ package de.ilianp.audiotranskript
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,6 +41,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -53,9 +54,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -86,7 +91,7 @@ class MainActivity : ComponentActivity() {
      * compares by equality, so a bare URI assigned a second time would look unchanged and
      * the screen would sit on the old transcript instead of starting over.
      */
-    private data class SharedAudio(val uri: Uri, val deliveryId: Int)
+    private data class SharedAudio(val uris: List<Uri>, val deliveryId: Int)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,7 +101,7 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val message = shared.value
                     AppScreen(
-                        sharedUri = message?.uri,
+                        sharedUris = message?.uris.orEmpty(),
                         shareDeliveryId = message?.deliveryId ?: 0,
                     )
                 }
@@ -113,32 +118,27 @@ class MainActivity : ComponentActivity() {
     /** Takes the message out of [intent], if it carries one - a plain launcher tap does not,
      *  and must not wipe what is on screen. */
     private fun deliver(intent: Intent?) {
-        val uri = extractSharedAudio(intent) ?: return
-        shared.value = SharedAudio(uri, ++shareCount)
-    }
-
-    private fun extractSharedAudio(intent: Intent?): Uri? {
-        if (intent?.action != Intent.ACTION_SEND) return null
-        return if (Build.VERSION.SDK_INT >= 33) {
-            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getParcelableExtra(Intent.EXTRA_STREAM)
-        }
+        val uris = sharedAudioUris(intent).ifEmpty { return }
+        shared.value = SharedAudio(uris, ++shareCount)
     }
 }
 
 /**
+ * [sharedUris] is what reached the app through „Transkript starten“: usually one message, several
+ * if they were shared together. Whatever sits in the [PendingQueue] from „Zwischenspeichern“ is
+ * put in front of it, and the whole batch is transcribed as one.
+ *
  * [shareDeliveryId] rises with every share reaching the app, so that the same message shared
  * twice in a row is still handled twice. It has no meaning of its own beyond being different.
  */
 @Composable
-fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
+fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val settings = remember { Settings(context) }
     val history = remember { TranscriptHistory(context) }
+    val queue = remember { PendingQueue(context) }
 
     var openRouterKey by remember { mutableStateOf(settings.openRouterApiKey) }
     var groqKey by remember { mutableStateOf(settings.groqApiKey) }
@@ -148,14 +148,19 @@ fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
 
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
+    // One transcript per message of the batch; [result] is these joined.
+    var segments by remember { mutableStateOf<List<String>>(emptyList()) }
+    var doneCount by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
     var elapsedSeconds by remember { mutableIntStateOf(0) }
     var job by remember { mutableStateOf<Job?>(null) }
     var debugLog by remember { mutableStateOf(DebugLog.get(context)) }
 
-    // What the player plays: the message just shared or picked, or the stored copy of an
-    // entry taken from the history.
-    var activeUri by remember { mutableStateOf<Uri?>(null) }
+    // What the player plays: the message(s) just shared or picked, or the stored copies of an
+    // entry taken from the history. More than one for a batch.
+    var activeUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    val player = rememberMessagePlayer(activeUris)
+    var pendingCount by remember { mutableIntStateOf(0) }
     var entries by remember { mutableStateOf<List<HistoryEntry>>(emptyList()) }
     var historyExpanded by remember { mutableStateOf(false) }
 
@@ -173,36 +178,41 @@ fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
     fun showFromHistory(entry: HistoryEntry) {
         job?.cancel()
         running = false
-        activeUri = history.audioUri(entry)
+        activeUris = history.audioUris(entry)
         result = entry.transcript
+        segments = entry.segments
         error = null
         restoredAt = entry.createdAt
     }
 
-    fun startTranscription(uri: Uri) {
-        if (running) return
+    fun startTranscription(uris: List<Uri>) {
+        if (running || uris.isEmpty()) return
         running = true
         result = null
+        segments = emptyList()
         error = null
         restoredAt = null
         elapsedSeconds = 0
+        doneCount = 0
         job = scope.launch {
             try {
-                val payload = withContext(Dispatchers.IO) { readAudio(context, uri) }
-                val text = WizperClient.transcribe(
-                    payload,
+                val payloads = withContext(Dispatchers.IO) { uris.map { readAudio(context, it) } }
+                val texts = WizperClient.transcribeAll(
+                    payloads,
                     openRouterKey,
                     groqKey,
                     sonioxKey,
                     langCode,
+                    onProgress = { doneCount = it },
                 ) { info ->
                     DebugLog.addSonioxJob(context, info)
                     debugLog = DebugLog.get(context)
                 }
-                result = text
+                segments = texts
+                result = WizperClient.joinTranscripts(texts)
                 // Stored right away, audio and all: from here on the message survives the app
                 // being swiped away, which the grant on a shared URI does not.
-                entries = withContext(Dispatchers.IO) { history.add(text, payload) }
+                entries = withContext(Dispatchers.IO) { history.add(texts, payloads) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -216,27 +226,46 @@ fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
         }
     }
 
-    /** Hands the screen over to another message, dropping whatever was still running for the
-     *  previous one. */
-    fun takeOver(uri: Uri) {
+    /**
+     * Hands the screen over to another message - or batch - dropping whatever was still running
+     * for the previous one. With [withQueue], the messages parked by „Zwischenspeichern“ go
+     * first, in the order they were shared, and the queue is empty afterwards.
+     */
+    fun takeOver(uris: List<Uri>, withQueue: Boolean) {
         job?.cancel()
         running = false
-        activeUri = uri
+        val batch = if (withQueue) queue.takeAll() + uris else uris
+        if (withQueue) pendingCount = 0
+        if (batch.isEmpty()) return
+        activeUris = batch
         result = null
+        segments = emptyList()
         error = null
         restoredAt = null
-        if (hasKey) startTranscription(uri)
+        if (hasKey) startTranscription(batch)
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) takeOver(uri)
+    // Several files at once are one batch, just like several shared together.
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) takeOver(uris, withQueue = false)
     }
 
     // Keyed on the intent's message, not on Unit: a share arriving while the app is already
     // open (onNewIntent) replaces what is on screen and starts straight away, even if the
     // previous message is still being transcribed.
-    LaunchedEffect(sharedUri, shareDeliveryId) {
-        if (sharedUri != null) takeOver(sharedUri)
+    LaunchedEffect(sharedUris, shareDeliveryId) {
+        if (sharedUris.isNotEmpty()) takeOver(sharedUris, withQueue = true)
+    }
+
+    // „Zwischenspeichern“ adds to the queue without ever showing this screen, so the count is
+    // looked up again whenever the app comes back to the front.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) pendingCount = queue.count()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Opened from the launcher rather than from a share: bring the last transcription back,
@@ -244,7 +273,8 @@ fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
     LaunchedEffect(Unit) {
         val stored = withContext(Dispatchers.IO) { history.entries() }
         entries = stored
-        if (sharedUri == null && activeUri == null && result == null) {
+        pendingCount = queue.count()
+        if (sharedUris.isEmpty() && activeUris.isEmpty() && result == null) {
             stored.firstOrNull()?.let { showFromHistory(it) }
         }
     }
@@ -274,7 +304,7 @@ fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
         bottomBar = {
             // Pinned to the bottom: the message stays playable however far the transcript below
             // it has been scrolled, and the controls stay in reach of the thumb.
-            activeUri?.let { MessagePlayerBar(uri = it) }
+            player?.let { MessagePlayerBar(controller = it) }
         },
     ) { innerPadding ->
         Column(
@@ -331,9 +361,21 @@ fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
                         // cannot stay on screen with a player pointing at a deleted file.
                         if (restoredAt != null) {
                             result = null
-                            activeUri = null
+                            segments = emptyList()
+                            activeUris = emptyList()
                             restoredAt = null
                         }
+                    },
+                )
+            }
+
+            if (pendingCount > 0) {
+                PendingSection(
+                    count = pendingCount,
+                    onStart = { takeOver(emptyList(), withQueue = true) },
+                    onDiscard = {
+                        queue.clear()
+                        pendingCount = 0
                     },
                 )
             }
@@ -345,20 +387,25 @@ fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
                 Text("Audiodatei auswählen")
             }
 
-            val uri = activeUri
+            val uris = activeUris
             // Also shown without audio: an entry whose copy could not be written, or whose
             // file is gone, still has its text - and that is the part worth reading.
-            if (uri != null || result != null) {
+            if (uris.isNotEmpty() || result != null) {
                 Spacer(Modifier.height(8.dp))
                 TranscriptionPanel(
                     running = running,
                     result = result,
+                    segments = segments,
+                    doneCount = doneCount,
+                    totalCount = uris.size,
+                    playingSegment = player?.takeIf { it.isPlaying }?.currentIndex,
+                    onPlaySegment = { player?.playSegment(it) },
                     error = error,
                     hasKey = hasKey,
                     elapsedSeconds = elapsedSeconds,
                     restoredAt = restoredAt,
-                    hasAudio = uri != null,
-                    onStart = { uri?.let { startTranscription(it) } },
+                    hasAudio = uris.isNotEmpty(),
+                    onStart = { startTranscription(uris) },
                     onCancel = { job?.cancel(); running = false },
                     onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
                     onShare = { result?.let { shareText(context, it) } },
@@ -366,7 +413,8 @@ fun AppScreen(sharedUri: Uri?, shareDeliveryId: Int = 0) {
             } else {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit \"Audio-Transkript\" – oder wähle oben eine Datei aus – um sie zu transkribieren.",
+                    "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit „Audio-Transkript“ → „Transkript starten“ – oder wähle oben eine Datei aus – um sie zu transkribieren. " +
+                        "Mehrere Nachrichten am Stück: alle bis auf die letzte mit „Zwischenspeichern“ teilen, die letzte mit „Transkript starten“.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -550,6 +598,11 @@ private fun LanguageDropdown(selectedCode: String, onSelect: (String) -> Unit) {
 private fun TranscriptionPanel(
     running: Boolean,
     result: String?,
+    segments: List<String>,
+    doneCount: Int,
+    totalCount: Int,
+    playingSegment: Int?,
+    onPlaySegment: (Int) -> Unit,
     error: String?,
     hasKey: Boolean,
     elapsedSeconds: Int,
@@ -574,7 +627,8 @@ private fun TranscriptionPanel(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         CircularProgressIndicator()
-                        Text("Wird transkribiert … (${elapsedSeconds}s)")
+                        val progress = if (totalCount > 1) " $doneCount von $totalCount fertig" else ""
+                        Text("Wird transkribiert …$progress (${elapsedSeconds}s)")
                     }
                     OutlinedButton(onClick = onCancel) { Text("Abbrechen") }
                 }
@@ -586,7 +640,11 @@ private fun TranscriptionPanel(
                 }
 
                 result != null -> {
-                    Text("Transkription", style = MaterialTheme.typography.titleMedium)
+                    val batch = segments.size > 1
+                    Text(
+                        if (batch) "Transkription · ${segments.size} Nachrichten" else "Transkription",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
                     if (restoredAt != null) {
                         Text(
                             "Aus dem Verlauf · ${relativeTime(restoredAt)}" +
@@ -595,8 +653,20 @@ private fun TranscriptionPanel(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    SelectionContainer {
-                        Text(result)
+                    if (batch) {
+                        segments.forEachIndexed { index, text ->
+                            SegmentHeader(
+                                number = index + 1,
+                                playing = playingSegment == index,
+                                enabled = hasAudio,
+                                onClick = { onPlaySegment(index) },
+                            )
+                            SelectionContainer { Text(text) }
+                        }
+                    } else {
+                        SelectionContainer {
+                            Text(result)
+                        }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = onCopy) { Text("Kopieren") }
@@ -611,6 +681,68 @@ private fun TranscriptionPanel(
                     }
                     Button(onClick = onStart, enabled = hasKey && hasAudio) { Text("Transkribieren") }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Labels one message inside a batch transcript. Tapping it plays the batch from the start of
+ * that message; the label of the message playing right now is set in bold.
+ */
+@Composable
+private fun SegmentHeader(number: Int, playing: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (enabled) {
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Text(
+            "Nachricht $number",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (playing) FontWeight.Bold else FontWeight.Normal,
+            color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * Messages parked with „Zwischenspeichern“, waiting for the last one. Normally that one arrives
+ * through „Transkript starten“ and takes them along; this is the way out when it never does -
+ * the last message was parked as well, or the batch is not wanted after all.
+ */
+@Composable
+private fun PendingSection(count: Int, onStart: () -> Unit, onDiscard: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                if (count == 1) "1 Nachricht zwischengespeichert" else "$count Nachrichten zwischengespeichert",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                "Wird mit der nächsten Nachricht, die du mit „Transkript starten“ teilst, " +
+                    "zusammen transkribiert.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onStart) { Text("Jetzt transkribieren") }
+                OutlinedButton(onClick = onDiscard) { Text("Verwerfen") }
             }
         }
     }
@@ -664,8 +796,9 @@ private fun HistorySection(
                             .clickable { onSelect(entry) }
                             .padding(vertical = 10.dp),
                     ) {
+                        val size = entry.segments.size
                         Text(
-                            relativeTime(entry.createdAt),
+                            relativeTime(entry.createdAt) + if (size > 1) " · $size Nachrichten" else "",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

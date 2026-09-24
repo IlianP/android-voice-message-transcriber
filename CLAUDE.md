@@ -38,6 +38,19 @@ sondern zusammen mit einem hochzählenden `deliveryId`: Compose-State vergleicht
 Änderung" aus und würde still ignoriert. Der Verlauf ist in `backup_rules.xml` /
 `data_extraction_rules.xml` vom Cloud-Backup ausgenommen.
 
+## Stapel: „Zwischenspeichern" / „Transkript starten"
+
+Im Teilen-Dialog gibt es zwei Ziele: der `SEND`-Filter von `MainActivity` (Label
+„Transkript starten" am `intent-filter`) und `QueueShareActivity` („Zwischenspeichern").
+Letztere ist unsichtbar, hat `taskAffinity=""` (sonst holt ihr `finish()` den Hauptbildschirm
+nach vorne statt zum Chat zurückzukehren) und kopiert das Audio **vor** `finish()` nach
+`filesDir/pending/` — die URI-Berechtigung stirbt mit der Activity. `AppScreen.takeOver`
+holt die Warteschlange per `PendingQueue.takeAll()` vor die geteilte Nachricht;
+`WizperClient.transcribeAll` macht einen Request pro Nachricht, `MessagePlayerController`
+spielt die Dateien als eine durchgehende Zeitleiste. Ein Stapel ist im Verlauf ein Eintrag
+(`audioFileNames`/`segments`); alte Einträge mit einzelnem `audio`-Feld werden weiter gelesen.
+Ideen für später stehen in `ROADMAP.md`.
+
 ## Build & Test
 
 ```bash

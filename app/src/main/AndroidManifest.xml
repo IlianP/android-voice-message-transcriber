@@ -22,8 +22,35 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!--
+                Zwei Teilen-Ziele statt einem: Android zeigt sie im Teilen-Dialog als Auswahl
+                unter dem App-Symbol (wie bei Dropbox). Das Label am Filter ersetzt dort den
+                App-Namen, im Launcher bleibt es beim App-Namen der Activity.
+            -->
+            <intent-filter android:label="@string/share_start">
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            „Zwischenspeichern": legt die Nachricht nur in die Warteschlange und kehrt sofort
+            zur teilenden App zurück. Unsichtbar (transluzent, ohne Inhalt) und mit eigener,
+            leerer taskAffinity, damit beim Beenden nicht der Hauptbildschirm der App nach
+            vorne kommt, sondern der Chat bleibt.
+        -->
+        <activity
+            android:name=".QueueShareActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="@string/share_queue"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="audio/*" />
             </intent-filter>

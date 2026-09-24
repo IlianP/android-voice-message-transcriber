@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     Android 12+ (dataExtractionRules). Wie backup_rules.xml: der Verlauf mit Transkripten und
-    Audiokopien bleibt lokal - weder im Cloud-Backup noch beim Geraetewechsel.
+    Audiokopien bleibt lokal - weder im Cloud-Backup noch beim Geraetewechsel. Ebenso pending/,
+    die per „Zwischenspeichern" geparkten Sprachnachrichten.
 
     Dazu die beiden Key-Stores, aus denselben Gruenden wie dort: settings_secure.xml ist ohne
     den Android Keystore nicht entschluesselbar, settings.xml koennte auf alten Installationen
@@ -13,11 +14,13 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="history" />
+        <exclude domain="file" path="pending" />
         <exclude domain="sharedpref" path="settings_secure.xml" />
         <exclude domain="sharedpref" path="settings.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="history" />
+        <exclude domain="file" path="pending" />
         <exclude domain="sharedpref" path="settings_secure.xml" />
         <exclude domain="sharedpref" path="settings.xml" />
     </device-transfer>

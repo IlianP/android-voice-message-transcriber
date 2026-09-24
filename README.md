@@ -7,7 +7,9 @@ und **parallel Anhören**.
 
 ## Funktionen
 
-- **Teilen → Transkribieren**: reagiert auf `ACTION_SEND` mit `audio/*`.
+- **Teilen → Transkribieren**: reagiert auf `ACTION_SEND` (und `ACTION_SEND_MULTIPLE`) mit
+  `audio/*`. Im Teilen-Dialog stehen zwei Ziele zur Wahl: **„Transkript starten"** und
+  **„Zwischenspeichern"** (siehe [Mehrere Nachrichten am Stück](#mehrere-nachrichten-am-stück)).
 - **Transkription** über:
   - **OpenRouter** (`microsoft/mai-transcribe-2`) – primär. Microsofts MAI-Transcribe-2 führt
     den FLEURS-Benchmark an und kostet 0,10 $ pro Stunde Audio; OpenRouter reicht den
@@ -69,6 +71,44 @@ Der Verlauf wird ausdrücklich **nicht** ins Cloud-Backup übernommen: `backup_r
 `data_extraction_rules.xml` schließen das Verzeichnis aus, sodass Transkripte und Sprachnachrichten
 das Gerät nicht verlassen.
 
+## Mehrere Nachrichten am Stück
+
+Schickt jemand mehrere Sprachnachrichten hintereinander, müssen sie nicht einzeln transkribiert
+werden. Die App meldet sich im Teilen-Dialog mit **zwei Zielen** an – Android zeigt sie als Auswahl
+unter dem App-Symbol, so wie bei Dropbox:
+
+- **Zwischenspeichern** – die Nachricht wird nur geparkt. Die App öffnet sich dabei nicht; ein
+  kurzer Toast („2 Nachrichten zwischengespeichert …") bestätigt es, und man bleibt im Chat.
+- **Transkript starten** – transkribiert diese Nachricht **zusammen mit allen zwischengespeicherten**,
+  in der Reihenfolge, in der sie geteilt wurden. Ohne zwischengespeicherte Nachrichten ist das
+  genau das bisherige Verhalten.
+
+Ablauf also: alle bis auf die letzte Nachricht mit „Zwischenspeichern" teilen, die letzte mit
+„Transkript starten". Werden mehrere Nachrichten auf einmal markiert und geteilt
+(`ACTION_SEND_MULTIPLE`), ist das ebenfalls ein Stapel; auch „Audiodatei auswählen" nimmt mehrere
+Dateien.
+
+**Transkription:** ein Request pro Nachricht (höchstens drei gleichzeitig), kein Zusammenschneiden
+von Audio. Das Ergebnis ist *ein* Transkript: auf dem Bildschirm mit einer Überschrift „Nachricht
+1 / 2 / 3" vor jedem Teil, beim Kopieren/Teilen als durchgehender Text mit Leerzeilen dazwischen.
+Scheitert eine Nachricht, meldet der Fehler, welche („Nachricht 2 von 3: …").
+
+**Wiedergabe:** die Player-Leiste läuft **durchgehend** vom Anfang der ersten bis zum Ende der
+letzten Nachricht – Fortschrittsbalken, Gesamtdauer und ±10 s gelten über alle hinweg, eine
+Nachricht geht nahtlos in die nächste über, und unter dem Balken steht „Nachricht 2 von 3".
+Zusätzlich **springt** ein Tipp auf eine Überschrift „▶ Nachricht N" im Transkript direkt an deren
+Anfang.
+
+**Liegen gebliebenes:** Wurde auch die letzte Nachricht versehentlich nur zwischengespeichert,
+zeigt der Hauptbildschirm eine Karte „N Nachrichten zwischengespeichert" mit **Jetzt
+transkribieren** und **Verwerfen**. Nach 24 Stunden verfallen zwischengespeicherte Nachrichten von
+selbst, damit sie nicht Tage später in ein fremdes Gespräch rutschen.
+
+Technisch: `QueueShareActivity` ist unsichtbar (transluzent, eigene leere `taskAffinity`) und
+kopiert das Audio nach `filesDir/pending/` (`PendingQueue.kt`), bevor sie sich beendet – die
+Leseberechtigung einer geteilten URI endet mit der Activity. Ein Stapel ist im Verlauf **ein**
+Eintrag mit einer Audiodatei pro Nachricht.
+
 ## Eigener Eintrag in den „letzten Apps"
 
 Ohne Zutun landet eine per `ACTION_SEND` gestartete Activity **im Task der teilenden App** – die
@@ -95,6 +135,8 @@ app/src/main/java/de/ilianp/audiotranskript/
 ├── MainActivity.kt      # UI (Compose): Scaffold, zuklappbare Einstellungen, Verlauf, Transkriptions-Panel
 ├── MessagePlayer.kt     # ▶️ Audio-Player mit Tempo 1×–2,5×, fix am unteren Rand
 ├── TranscriptHistory.kt # Verlauf: Transkripte + Audiokopien in filesDir, 10 Einträge / 7 Tage
+├── PendingQueue.kt      # „Zwischenspeichern": geparkte Nachrichten bis zur letzten
+├── QueueShareActivity.kt # unsichtbares Teilen-Ziel „Zwischenspeichern"
 ├── WizperClient.kt      # Orchestrierung: OpenRouter, dann Groq, dann Soniox
 ├── OpenRouterClient.kt  # OpenRouter STT API (MAI-Transcribe-2)
 ├── GroqClient.kt        # Groq Whisper API
@@ -251,6 +293,9 @@ dort gelten deren Datenschutzbestimmungen. Soniox-Uploads löscht die App direkt
 dem Abruf des Transkripts wieder, Reste werden beim nächsten App-Start abgeräumt.
 API-Keys und Einstellungen bleiben lokal auf dem Gerät. Es findet keine Analyse,
 kein Tracking und keine Übertragung an Dritte darüber hinaus statt.
+
+Per „Zwischenspeichern" geparkte Sprachnachrichten liegen bis zur Transkription, höchstens aber
+24 Stunden, unter `filesDir/pending/` – ebenfalls privat und vom Backup ausgenommen.
 
 Für den Verlauf speichert die App Transkripte **und Kopien der Sprachnachrichten** im privaten
 App-Verzeichnis (`filesDir/history/`), auf das andere Apps keinen Zugriff haben. Beides wird nach

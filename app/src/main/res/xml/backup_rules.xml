@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     Android 11 und aelter (fullBackupContent). Der Verlauf enthaelt Transkripte und Kopien der
-    Sprachnachrichten - die bleiben auf dem Geraet und gehen nicht in ein Cloud-Backup.
+    Sprachnachrichten - die bleiben auf dem Geraet und gehen nicht in ein Cloud-Backup. Dasselbe
+    gilt fuer pending/, die per „Zwischenspeichern" geparkten Sprachnachrichten.
 
     settings_secure.xml enthaelt die API-Keys, verschluesselt mit einem Schluessel aus dem
     Android Keystore. Der Keystore wird nie mitgesichert, ein wiederhergestelltes
@@ -15,6 +16,7 @@
 -->
 <full-backup-content>
     <exclude domain="file" path="history" />
+    <exclude domain="file" path="pending" />
     <exclude domain="sharedpref" path="settings_secure.xml" />
     <exclude domain="sharedpref" path="settings.xml" />
 </full-backup-content>
