@@ -163,6 +163,26 @@ class WizperClientTest {
         assertEquals(listOf("OpenRouter 1", "Groq 2", "OpenRouter 3"), texts)
     }
 
+    @Test
+    fun `a batch past the size limit fails with a message instead of running out of memory`() {
+        val files = List(3) { i ->
+            File.createTempFile("gross$i", ".ogg").apply { writeBytes(ByteArray(400)) }
+        }
+        try {
+            val thrown = runCatching {
+                readBatch(context, files.map { Uri.fromFile(it) }, maxBytes = 1_000)
+            }.exceptionOrNull()
+            assertTrue("Kein WizperException: $thrown", thrown is WizperException)
+            assertTrue(thrown!!.message!!, thrown.message!!.startsWith("Zu viel Audio"))
+
+            // Under the limit, and a single message whatever its size, reads as always.
+            assertEquals(2, readBatch(context, files.take(2).map { Uri.fromFile(it) }, 1_000).size)
+            assertEquals(1, readBatch(context, listOf(Uri.fromFile(files[0])), 10).size)
+        } finally {
+            files.forEach { it.delete() }
+        }
+    }
+
     private fun ByteArray.contains(part: ByteArray): Boolean =
         (0..size - part.size).any { start -> part.indices.all { this[start + it] == part[it] } }
 

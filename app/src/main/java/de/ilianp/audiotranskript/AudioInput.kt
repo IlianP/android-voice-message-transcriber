@@ -90,6 +90,34 @@ fun readAudio(context: Context, uri: Uri): AudioPayload {
     return AudioPayload(bytes, "audio.$ext", cleanMime)
 }
 
+/**
+ * How much audio a batch may hold in total. All of it sits in memory until the transcripts are
+ * in (the history keeps a copy), so a batch without a limit could run the app out of heap before
+ * the first request. Voice messages come nowhere near it - at WhatsApp's bitrate this is hours
+ * of speech; it only stops someone from sharing a stack of long recordings in one go.
+ */
+const val MAX_BATCH_BYTES: Long = 50L * 1024 * 1024
+
+/**
+ * Reads every message of a batch, failing with a readable message as soon as the total passes
+ * [maxBytes] - before the next file is read, not after all of them are. A single message is not
+ * limited: that is no different from what the app always did.
+ */
+fun readBatch(context: Context, uris: List<Uri>, maxBytes: Long = MAX_BATCH_BYTES): List<AudioPayload> {
+    var total = 0L
+    return uris.map { uri ->
+        readAudio(context, uri).also { payload ->
+            total += payload.bytes.size
+            if (uris.size > 1 && total > maxBytes) {
+                throw WizperException(
+                    "Zu viel Audio auf einmal (mehr als ${maxBytes / (1024 * 1024)} MB). " +
+                        "Bitte in kleineren Gruppen transkribieren.",
+                )
+            }
+        }
+    }
+}
+
 private fun queryDisplayName(resolver: ContentResolver, uri: Uri): String? = runCatching {
     resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
         if (c.moveToFirst()) c.getString(0) else null

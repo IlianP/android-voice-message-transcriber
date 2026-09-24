@@ -93,4 +93,17 @@ class PendingQueueTest {
         assertEquals(0, queue.count())
         assertTrue(File(onScreen.single().path!!).exists())
     }
+
+    @Test
+    fun `a share that cannot be parked completely leaves nothing behind`() {
+        queue.add(payload(1))
+        // Stands in for a failing write: this "extension" points into a folder that does not
+        // exist, so the second message throws after the first one of this share is on disk.
+        val unwritable = payload(3, "ogg/fehlt/audio")
+
+        val thrown = runCatching { queue.addAll(listOf(payload(2), unwritable)) }.exceptionOrNull()
+
+        assertTrue("Kein Fehler beim Schreiben", thrown != null)
+        assertEquals(1, queue.count())
+    }
 }

@@ -3,6 +3,7 @@ package de.ilianp.audiotranskript
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -47,6 +48,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -85,7 +88,10 @@ class MainActivity : ComponentActivity() {
     private var shareCount = 0
 
     /**
-     * A shared message together with the number of the delivery it arrived in.
+     * A shared batch together with the number of the delivery it arrived in.
+     *
+     * [uris] is the whole batch - the messages parked by „Zwischenspeichern“ first, then the
+     * shared one(s) - resolved once when the share arrives, see [deliver].
      *
      * The counter is what makes the same message shared twice two separate events: state
      * compares by equality, so a bare URI assigned a second time would look unchanged and
@@ -95,7 +101,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        deliver(intent)
+        // Recreated (rotation, dark mode): the share was already delivered, and its queue already
+        // taken. Delivering the intent again would take the queue a second time - by then empty,
+        // and taking it clears the batch taken the first time - so the batch comes back from the
+        // saved state instead.
+        val restored = savedInstanceState?.let { state ->
+            val uris = savedUris(state)
+            shareCount = state.getInt(KEY_SHARE_COUNT)
+            if (uris.isNullOrEmpty()) null else SharedAudio(uris, shareCount)
+        }
+        if (savedInstanceState == null) deliver(intent) else shared.value = restored
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -119,14 +134,35 @@ class MainActivity : ComponentActivity() {
      *  and must not wipe what is on screen. */
     private fun deliver(intent: Intent?) {
         val uris = sharedAudioUris(intent).ifEmpty { return }
-        shared.value = SharedAudio(uris, ++shareCount)
+        val batch = PendingQueue(this).takeAll() + uris
+        shared.value = SharedAudio(batch, ++shareCount)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(KEY_SHARE_COUNT, shareCount)
+        shared.value?.let { outState.putParcelableArrayList(KEY_BATCH, ArrayList(it.uris)) }
+    }
+
+    private fun savedUris(state: Bundle): List<Uri>? =
+        if (Build.VERSION.SDK_INT >= 33) {
+            state.getParcelableArrayList(KEY_BATCH, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            state.getParcelableArrayList(KEY_BATCH)
+        }
+
+    private companion object {
+        const val KEY_BATCH = "shared_batch"
+        const val KEY_SHARE_COUNT = "share_count"
     }
 }
 
 /**
- * [sharedUris] is what reached the app through „Transkript starten“: usually one message, several
- * if they were shared together. Whatever sits in the [PendingQueue] from „Zwischenspeichern“ is
- * put in front of it, and the whole batch is transcribed as one.
+ * [sharedUris] is the batch that reached the app through „Transkript starten“: the messages
+ * parked with „Zwischenspeichern“ first, then the shared one(s). The activity takes them out of
+ * the [PendingQueue] when the share arrives, so that a recreated activity gets the same batch
+ * back instead of taking the queue a second time.
  *
  * [shareDeliveryId] rises with every share reaching the app, so that the same message shared
  * twice in a row is still handled twice. It has no meaning of its own beyond being different.
@@ -146,19 +182,21 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     var langCode by remember { mutableStateOf(settings.languageCode) }
     var savedHint by remember { mutableStateOf(false) }
 
-    var running by remember { mutableStateOf(false) }
-    var result by remember { mutableStateOf<String?>(null) }
+    // What is on screen survives the activity being recreated (rotation, dark mode): otherwise
+    // the transcript would vanish, and a run cut off by it would never finish.
+    var running by rememberSaveable { mutableStateOf(false) }
+    var result by rememberSaveable { mutableStateOf<String?>(null) }
     // One transcript per message of the batch; [result] is these joined.
-    var segments by remember { mutableStateOf<List<String>>(emptyList()) }
+    var segments by rememberSaveable(stateSaver = StringListSaver) { mutableStateOf(emptyList()) }
     var doneCount by remember { mutableIntStateOf(0) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by rememberSaveable { mutableStateOf<String?>(null) }
     var elapsedSeconds by remember { mutableIntStateOf(0) }
     var job by remember { mutableStateOf<Job?>(null) }
     var debugLog by remember { mutableStateOf(DebugLog.get(context)) }
 
     // What the player plays: the message(s) just shared or picked, or the stored copies of an
     // entry taken from the history. More than one for a batch.
-    var activeUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var activeUris by rememberSaveable(stateSaver = UriListSaver) { mutableStateOf(emptyList()) }
     val player = rememberMessagePlayer(activeUris)
     var pendingCount by remember { mutableIntStateOf(0) }
     var entries by remember { mutableStateOf<List<HistoryEntry>>(emptyList()) }
@@ -166,7 +204,11 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
 
     // Set while the transcript on screen comes from the history instead of this run, so the
     // panel can say so rather than passing off an old message as a fresh one.
-    var restoredAt by remember { mutableStateOf<Long?>(null) }
+    var restoredAt by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    // The share last acted on. Saved, so a recreated screen does not take the same share for a
+    // new one and start it over - by then the batch on screen may be a different one entirely.
+    var handledDelivery by rememberSaveable { mutableIntStateOf(-1) }
 
     val hasKey = openRouterKey.isNotBlank() || groqKey.isNotBlank() || sonioxKey.isNotBlank()
 
@@ -196,7 +238,7 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
         doneCount = 0
         job = scope.launch {
             try {
-                val payloads = withContext(Dispatchers.IO) { uris.map { readAudio(context, it) } }
+                val payloads = withContext(Dispatchers.IO) { readBatch(context, uris) }
                 val texts = WizperClient.transcribeAll(
                     payloads,
                     openRouterKey,
@@ -254,7 +296,21 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     // open (onNewIntent) replaces what is on screen and starts straight away, even if the
     // previous message is still being transcribed.
     LaunchedEffect(sharedUris, shareDeliveryId) {
-        if (sharedUris.isNotEmpty()) takeOver(sharedUris, withQueue = true)
+        if (sharedUris.isNotEmpty() && shareDeliveryId != handledDelivery) {
+            handledDelivery = shareDeliveryId
+            takeOver(sharedUris, withQueue = false)
+        }
+    }
+
+    // A run that the recreation cut off (its coroutine died with the old screen) starts again
+    // for the same batch. Read from the restored state before any effect runs: by the time this
+    // one does, a fresh share may already have set the flag for a run of its own.
+    val cutOffRun = remember { running }
+    LaunchedEffect(Unit) {
+        if (cutOffRun) {
+            running = false
+            startTranscription(activeUris)
+        }
     }
 
     // „Zwischenspeichern“ adds to the queue without ever showing this screen, so the count is
@@ -886,3 +942,13 @@ private fun shareText(context: Context, text: String) {
     }
     context.startActivity(Intent.createChooser(send, "Transkription teilen"))
 }
+
+private val UriListSaver = Saver<List<Uri>, ArrayList<String>>(
+    save = { uris -> ArrayList(uris.map { it.toString() }) },
+    restore = { saved -> saved.map { Uri.parse(it) } },
+)
+
+private val StringListSaver = Saver<List<String>, ArrayList<String>>(
+    save = { ArrayList(it) },
+    restore = { it },
+)

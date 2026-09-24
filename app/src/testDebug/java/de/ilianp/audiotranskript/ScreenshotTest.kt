@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -301,7 +302,10 @@ class ScreenshotTest {
         // The parked copies get names only the queue knows; every one of them lasts a minute.
         ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(60_000, 0) }
 
-        composeRule.setContent { AppScreen(sharedUris = listOf(Uri.fromFile(audioFile))) }
+        // What MainActivity hands the screen when „Transkript starten“ arrives: the parked
+        // messages taken out of the queue, then the shared one.
+        val batch = queue.takeAll() + Uri.fromFile(audioFile)
+        composeRule.setContent { AppScreen(sharedUris = batch, shareDeliveryId = 1) }
         composeRule.waitUntil(timeoutMillis = 10_000) {
             composeRule.onAllNodes(hasText("Dritte Nachricht", substring = true))
                 .fetchSemanticsNodes().isNotEmpty()
@@ -322,6 +326,43 @@ class ScreenshotTest {
 
         val stored = TranscriptHistory(context).entries().single()
         assertTrue("Verlauf hat nicht alle drei: ${stored.segments}", stored.segments.size == 3)
+    }
+
+    @Test
+    fun `a recreated screen keeps its batch and does not start over`() {
+        val queue = PendingQueue(context)
+        queue.add(payload(1))
+        audioFile.writeBytes(ByteArray(64) { 2 })
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val body = JSONObject(request.body.readUtf8())
+                val marker = Base64.getDecoder()
+                    .decode(body.getJSONObject("input_audio").getString("data")).first()
+                return MockResponse()
+                    .setHeader("Content-Type", "application/json")
+                    .setBody(JSONObject().put("text", "Teil $marker vom Stapel").toString())
+            }
+        }
+        ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(60_000, 0) }
+
+        val batch = queue.takeAll() + Uri.fromFile(audioFile)
+        val restoration = StateRestorationTester(composeRule)
+        restoration.setContent { AppScreen(sharedUris = batch, shareDeliveryId = 1) }
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Teil 2 vom Stapel")).fetchSemanticsNodes().isNotEmpty()
+        }
+        val requestsBefore = server.requestCount
+
+        // What a rotation does: the screen is rebuilt from its saved state, same share, same id.
+        restoration.emulateSavedInstanceStateRestore()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Transkription · 2 Nachrichten").assertExists()
+        composeRule.onNodeWithText("Teil 1 vom Stapel").assertExists()
+        assertTrue(
+            "Nach dem Neuaufbau erneut transkribiert (${server.requestCount} statt $requestsBefore Requests)",
+            server.requestCount == requestsBefore,
+        )
     }
 
     /** Puts one finished transcription into the history, with playable audio behind it. */

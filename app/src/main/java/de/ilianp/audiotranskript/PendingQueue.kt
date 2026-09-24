@@ -29,19 +29,37 @@ class PendingQueue(private val context: Context) {
     private val activeDir: File get() = File(dir, ACTIVE_DIR)
 
     /** Parks a copy of [payload] and returns how many messages are now waiting. */
-    fun add(payload: AudioPayload, now: Long = System.currentTimeMillis()): Int = synchronized(LOCK) {
-        dir.mkdirs()
-        val ext = payload.filename.substringAfterLast('.', "ogg")
-        val waiting = pendingFiles(now)
-        // Time first, so a plain name sort is the order of sharing; the counter keeps several
-        // messages shared in one go (ACTION_SEND_MULTIPLE) in their order, too. The random tail
-        // keeps a name from ever coming back in a later batch, where the player would take the
-        // same URI for the same audio and keep playing the old one.
-        val tail = UUID.randomUUID().toString().take(8)
-        val name = "%013d-%03d-%s.%s".format(now, waiting.size, tail, ext)
-        File(dir, name).writeBytes(payload.bytes)
-        waiting.size + 1
-    }
+    fun add(payload: AudioPayload, now: Long = System.currentTimeMillis()): Int =
+        addAll(listOf(payload), now)
+
+    /**
+     * Parks several messages shared in one go, all or none: if one cannot be written, the ones
+     * already written go again, so a retried share does not park them twice. Returns how many
+     * messages are now waiting.
+     */
+    fun addAll(payloads: List<AudioPayload>, now: Long = System.currentTimeMillis()): Int =
+        synchronized(LOCK) {
+            dir.mkdirs()
+            val waiting = pendingFiles(now).size
+            val written = mutableListOf<File>()
+            try {
+                payloads.forEachIndexed { index, payload ->
+                    val ext = payload.filename.substringAfterLast('.', "ogg")
+                    // Time first, so a plain name sort is the order of sharing; the counter keeps
+                    // messages shared in one go (ACTION_SEND_MULTIPLE) in their order, too. The
+                    // random tail keeps a name from ever coming back in a later batch, where the
+                    // player would take the same URI for the same audio and keep playing the old one.
+                    val tail = UUID.randomUUID().toString().take(8)
+                    val file = File(dir, "%013d-%03d-%s.%s".format(now, waiting + index, tail, ext))
+                    written += file
+                    file.writeBytes(payload.bytes)
+                }
+            } catch (e: Exception) {
+                written.forEach { it.delete() }
+                throw e
+            }
+            waiting + payloads.size
+        }
 
     /** How many messages are waiting. Expired ones are swept off disk on the way. */
     fun count(now: Long = System.currentTimeMillis()): Int = synchronized(LOCK) {

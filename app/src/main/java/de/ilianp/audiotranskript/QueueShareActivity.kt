@@ -34,10 +34,10 @@ class QueueShareActivity : ComponentActivity() {
         lifecycleScope.launch {
             val waiting = withContext(Dispatchers.IO) {
                 runCatching {
-                    val queue = PendingQueue(applicationContext)
-                    var count = 0
-                    uris.forEach { count = queue.add(readAudio(applicationContext, it)) }
-                    count
+                    // Everything is read before anything is parked: one unreadable message
+                    // fails the whole share instead of leaving the others half queued.
+                    val payloads = uris.map { readAudio(applicationContext, it) }
+                    PendingQueue(applicationContext).addAll(payloads)
                 }
             }
             val message = waiting.fold(
