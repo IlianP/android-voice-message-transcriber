@@ -41,6 +41,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -210,21 +211,65 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     // new one and start it over - by then the batch on screen may be a different one entirely.
     var handledDelivery by rememberSaveable { mutableIntStateOf(-1) }
 
+    // The summary of the transcript on screen, made only on request. [entryId] is its history
+    // entry, so that a finished summary is stored alongside the transcript it belongs to.
+    var entryId by rememberSaveable { mutableStateOf<String?>(null) }
+    var summary by rememberSaveable { mutableStateOf<String?>(null) }
+    var summaryError by rememberSaveable { mutableStateOf<String?>(null) }
+    var summarizing by remember { mutableStateOf(false) }
+    var summaryJob by remember { mutableStateOf<Job?>(null) }
+
     val hasKey = openRouterKey.isNotBlank() || groqKey.isNotBlank() || sonioxKey.isNotBlank()
 
     // Keys are entered once, so the settings stay folded away - except on a fresh install, where
     // there is nothing to transcribe with yet and the user has to get to them.
     var settingsExpanded by remember { mutableStateOf(!hasKey) }
 
+    /** Drops the summary on screen, and one still being made, along with the transcript it was for. */
+    fun resetSummary() {
+        summaryJob?.cancel()
+        summarizing = false
+        summary = null
+        summaryError = null
+        entryId = null
+    }
+
     /** Puts a stored transcription back on screen, audio included - no provider involved. */
     fun showFromHistory(entry: HistoryEntry) {
         job?.cancel()
         running = false
+        resetSummary()
         activeUris = history.audioUris(entry)
         result = entry.transcript
         segments = entry.segments
         error = null
         restoredAt = entry.createdAt
+        entryId = entry.id
+        summary = entry.summary
+    }
+
+    fun startSummary() {
+        val texts = segments.ifEmpty { listOfNotNull(result) }
+        if (summarizing || texts.isEmpty() || openRouterKey.isBlank()) return
+        summarizing = true
+        summaryError = null
+        val forEntry = entryId
+        summaryJob = scope.launch {
+            try {
+                val text = SummaryClient.summarize(texts, openRouterKey)
+                summary = text
+                if (forEntry != null) {
+                    entries = withContext(Dispatchers.IO) { history.setSummary(forEntry, text) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                summaryError = e.message ?: "Unbekannter Fehler"
+            } finally {
+                // Same as for the transcription: a cancelled run leaves the flag to its successor.
+                if (isActive) summarizing = false
+            }
+        }
     }
 
     fun startTranscription(uris: List<Uri>) {
@@ -234,6 +279,7 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
         segments = emptyList()
         error = null
         restoredAt = null
+        resetSummary()
         elapsedSeconds = 0
         doneCount = 0
         job = scope.launch {
@@ -255,6 +301,8 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                 // Stored right away, audio and all: from here on the message survives the app
                 // being swiped away, which the grant on a shared URI does not.
                 entries = withContext(Dispatchers.IO) { history.add(texts, payloads) }
+                // The entry just written is the newest one.
+                entryId = entries.firstOrNull()?.id
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -284,6 +332,7 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
         segments = emptyList()
         error = null
         restoredAt = null
+        resetSummary()
         if (hasKey) startTranscription(batch)
     }
 
@@ -420,6 +469,7 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                             segments = emptyList()
                             activeUris = emptyList()
                             restoredAt = null
+                            resetSummary()
                         }
                     },
                 )
@@ -448,6 +498,20 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
             // file is gone, still has its text - and that is the part worth reading.
             if (uris.isNotEmpty() || result != null) {
                 Spacer(Modifier.height(8.dp))
+                // Above the transcript: whoever wants the summary wants to read it first.
+                if (result != null && !running && error == null && openRouterKey.isNotBlank()) {
+                    SummarySection(
+                        summary = summary,
+                        summarizing = summarizing,
+                        error = summaryError,
+                        totalDurationMs = player?.durationMs ?: 0,
+                        messageCount = segments.size,
+                        onSummarize = { startSummary() },
+                        onCancel = { summaryJob?.cancel(); summarizing = false },
+                        onCopy = { summary?.let { clipboard.setText(AnnotatedString(it)) } },
+                        onShare = { summary?.let { shareText(context, it, "Zusammenfassung teilen") } },
+                    )
+                }
                 TranscriptionPanel(
                     running = running,
                     result = result,
@@ -743,6 +807,123 @@ private fun TranscriptionPanel(
 }
 
 /**
+ * The summary of the transcript below it - offered, being made, failed, or done.
+ *
+ * From [SummaryClient.SUGGEST_FROM_MS] of audio on (one message or the batch as a whole) the
+ * offer is a card of its own; below that it is a plain text button, there if wanted but not in
+ * the way. Nothing is summarized without a tap: it sends the transcript to one more provider.
+ * [totalDurationMs] is 0 while the player is still preparing, or when there is no audio left.
+ */
+@Composable
+private fun SummarySection(
+    summary: String?,
+    summarizing: Boolean,
+    error: String?,
+    totalDurationMs: Int,
+    messageCount: Int,
+    onSummarize: () -> Unit,
+    onCancel: () -> Unit,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
+) {
+    when {
+        summary != null -> Card(modifier = Modifier.fillMaxWidth()) {
+            var expanded by rememberSaveable { mutableStateOf(true) }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { expanded = !expanded },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Zusammenfassung",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = if (expanded) {
+                            "Zusammenfassung zuklappen"
+                        } else {
+                            "Zusammenfassung aufklappen"
+                        },
+                    )
+                }
+                AnimatedVisibility(visible = expanded) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SelectionContainer { Text(summary) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = onCopy) { Text("Kopieren") }
+                            OutlinedButton(onClick = onShare) { Text("Teilen") }
+                        }
+                    }
+                }
+            }
+        }
+
+        summarizing -> Card(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator()
+                Text("Wird zusammengefasst …", modifier = Modifier.weight(1f))
+                OutlinedButton(onClick = onCancel) { Text("Abbrechen") }
+            }
+        }
+
+        error != null -> Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Zusammenfassung fehlgeschlagen", style = MaterialTheme.typography.titleSmall)
+                Text(error, color = MaterialTheme.colorScheme.error)
+                Button(onClick = onSummarize) { Text("Erneut versuchen") }
+            }
+        }
+
+        totalDurationMs >= SummaryClient.SUGGEST_FROM_MS -> Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val length = formatTime(totalDurationMs)
+                Text(
+                    if (messageCount > 1) {
+                        "$messageCount Nachrichten · $length insgesamt"
+                    } else {
+                        "Lange Nachricht · $length"
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    "Soll zusätzlich eine kurze Zusammenfassung erstellt werden?",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onSummarize) { Text("Zusammenfassen") }
+            }
+        }
+
+        else -> TextButton(onClick = onSummarize) { Text("Zusammenfassung erstellen") }
+    }
+}
+
+/**
  * Labels one message inside a batch transcript. Tapping it plays the batch from the start of
  * that message; the label of the message playing right now is set in bold.
  */
@@ -935,12 +1116,12 @@ private fun DebugPanel(
     }
 }
 
-private fun shareText(context: Context, text: String) {
+private fun shareText(context: Context, text: String, title: String = "Transkription teilen") {
     val send = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, text)
     }
-    context.startActivity(Intent.createChooser(send, "Transkription teilen"))
+    context.startActivity(Intent.createChooser(send, title))
 }
 
 private val UriListSaver = Saver<List<Uri>, ArrayList<String>>(

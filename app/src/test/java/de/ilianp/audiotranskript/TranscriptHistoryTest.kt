@@ -203,4 +203,34 @@ class TranscriptHistoryTest {
         assertEquals(listOf("abc.ogg"), entry.audioFileNames)
         assertNotNull(history.audioUri(entry))
     }
+
+    @Test
+    fun `a summary is stored with its entry and survives a reload`() {
+        val id = history.add("Langer Text", payload(1)).single().id
+
+        history.setSummary(id, "• Kurz")
+
+        assertEquals("• Kurz", TranscriptHistory(context).entries().single().summary)
+    }
+
+    @Test
+    fun `a summary for an entry that is gone changes nothing`() {
+        history.add("Text", payload(1))
+
+        val entries = history.setSummary("weg", "• Kurz")
+
+        assertNull(entries.single().summary)
+    }
+
+    @Test
+    fun `re-transcribing a message drops its old summary`() {
+        val now = System.currentTimeMillis()
+        val id = history.add("erster Versuch", payload(7), now - TimeUnit.MINUTES.toMillis(5)).single().id
+        history.setSummary(id, "• zum ersten Versuch", now - TimeUnit.MINUTES.toMillis(4))
+
+        history.add("zweiter Versuch", payload(7), now)
+
+        // The summary belonged to a transcript that is no longer there.
+        assertNull(history.entries(now).single().summary)
+    }
 }

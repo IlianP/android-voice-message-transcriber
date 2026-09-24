@@ -24,6 +24,9 @@ und **parallel Anhören**.
 - **▶️ Nachricht anhören** direkt beim Lesen, mit einstellbarem Tempo **1× / 1,5× / 2× / 2,5×**,
   Play/Pause, Fortschrittsleiste und Zeitanzeige.
 - Transkript **kopieren** / **teilen**, Text ist markierbar.
+- **Zusammenfassung** auf Wunsch (siehe [Zusammenfassung](#zusammenfassung)): ab 2 Minuten
+  Gesamtdauer bietet die App sie von selbst an, bei kürzeren Nachrichten reicht ein Tipp auf
+  „Zusammenfassung erstellen". Läuft über denselben OpenRouter-Key.
 - **Verlauf**: die letzten 10 Transkriptionen bleiben samt Audio auf dem Gerät (höchstens
   sieben Tage). Beim Öffnen aus dem App-Drawer ist die zuletzt transkribierte Nachricht
   wieder da, ältere holt man über die Liste zurück – jeweils ohne erneuten API-Aufruf.
@@ -43,8 +46,10 @@ entsprechend sortiert:
 2. **Verlauf** – ebenfalls zugeklappt, erscheint erst, wenn etwas gespeichert ist. Zeigt
    zugeklappt nur das Alter der letzten Nachricht; aufgeklappt eine Liste, aus der sich jede
    gespeicherte Nachricht mit Text und Audio zurückholen lässt.
-3. **Transkript** – der eigentliche Inhalt, mit Kopieren / Teilen / Neu. Scrollt frei.
-4. **Player** – als `bottomBar` des `Scaffold` fest am unteren Rand verankert. Er bleibt sichtbar
+3. **Zusammenfassung** – direkt über dem Transkript, nur mit OpenRouter-Key: als Angebot, als
+   aufklappbare Karte mit Stichpunkten oder, bei kurzen Nachrichten, als schlichter Textknopf.
+4. **Transkript** – der eigentliche Inhalt, mit Kopieren / Teilen / Neu. Scrollt frei.
+5. **Player** – als `bottomBar` des `Scaffold` fest am unteren Rand verankert. Er bleibt sichtbar
    und bedienbar, egal wie weit das Transkript darüber gescrollt ist, und liegt in Daumenreichweite.
    Die Leiste zeichnet ihr eigenes `navigationBarsPadding()`, weil die App unter Android 15
    zwangsweise edge-to-edge läuft.
@@ -70,6 +75,27 @@ Bytes), statt eine zweite Kopie anzulegen.
 Der Verlauf wird ausdrücklich **nicht** ins Cloud-Backup übernommen: `backup_rules.xml` und
 `data_extraction_rules.xml` schließen das Verzeichnis aus, sodass Transkripte und Sprachnachrichten
 das Gerät nicht verlassen.
+
+## Zusammenfassung
+
+`SummaryClient.kt` fasst ein fertiges Transkript über OpenRouters Chat-Endpunkt zusammen, mit
+**DeepSeek V4.1 Flash** (`deepseek/deepseek-v4.1-flash`, 0,10 $ / 0,50 $ pro Mio. Tokens Ein-/
+Ausgabe – eine Zusammenfassung kostet Bruchteile eines Cents). Ausgewählt anhand der
+[Benchmark-Heaven-API](https://benchmarkheaven.com) (September 2026): nahe der Preis-/Leistungs-
+Pareto-Front, jung, und mit ~235 Tokens/s deutlich schneller als das noch etwas günstigere
+GLM 5.3 Flash – man wartet ja am Bildschirm darauf.
+
+- **Nie automatisch.** Ab `SummaryClient.SUGGEST_FROM_MS` (2 Minuten, Einzelnachricht oder
+  Stapel insgesamt) erscheint über dem Transkript eine Karte „Lange Nachricht · 4:32 –
+  Zusammenfassen"; darunter nur ein Textknopf. Die Dauer kommt vom Player, der sie für die
+  durchgehende Zeitleiste ohnehin ermittelt.
+- **3–6 Stichpunkte in der Sprache des Transkripts.** Ein Stapel geht mit nummerierten
+  Nachrichten hinein. Das Transkript wird als Inhalt übergeben, nicht als Anweisung.
+- **Datenschutz-Routing:** der Request verlangt `data_collection: deny` und `zdr: true` –
+  OpenRouter leitet nur an Anbieter weiter, die weder trainieren noch speichern.
+- **Im Verlauf gespeichert** (Feld `summary` im Eintrag), damit sie beim erneuten Öffnen nicht
+  noch einmal bezahlt wird. Wird dieselbe Nachricht neu transkribiert, fällt die alte
+  Zusammenfassung weg – sie gehörte zu einem anderen Text.
 
 ## Mehrere Nachrichten am Stück
 
@@ -139,6 +165,7 @@ app/src/main/java/de/ilianp/audiotranskript/
 ├── QueueShareActivity.kt # unsichtbares Teilen-Ziel „Zwischenspeichern"
 ├── WizperClient.kt      # Orchestrierung: OpenRouter, dann Groq, dann Soniox
 ├── OpenRouterClient.kt  # OpenRouter STT API (MAI-Transcribe-2)
+├── SummaryClient.kt     # Zusammenfassung über OpenRouter (DeepSeek V4.1 Flash)
 ├── GroqClient.kt        # Groq Whisper API
 ├── SonioxClient.kt      # Soniox Async API (Upload → Job → Poll → Ergebnis → Aufräumen)
 ├── AudioInput.kt        # Liest die geteilte Audiodatei + MIME-/Endungs-Erkennung
@@ -267,6 +294,8 @@ reinen Debug-Abhängigkeit.
 `app/src/test/.../OpenRouterClientTest.kt` deckt `OpenRouterClient` gegen einen `MockWebServer` ab:
 Request-Form (Modell, base64-Audio, Format-Mapping, Sprache), beide OpenRouter-Fehlerformen
 (HTTP-Fehler und `error`-Objekt mit HTTP 200) sowie leere und kaputte Antworten.
+`SummaryClientTest.kt` macht dasselbe für die Zusammenfassung, inklusive Datenschutz-Routing
+und nummerierter Stapel.
 
 `app/src/test/.../SonioxClientTest.kt` deckt `SonioxClient` gegen einen `MockWebServer` ab:
 Upload → Poll → Transkript → Aufräumen im Erfolgsfall, beide Soniox-Fehlerformen (HTTP-Fehler
@@ -293,6 +322,10 @@ dort gelten deren Datenschutzbestimmungen. Soniox-Uploads löscht die App direkt
 dem Abruf des Transkripts wieder, Reste werden beim nächsten App-Start abgeräumt.
 API-Keys und Einstellungen bleiben lokal auf dem Gerät. Es findet keine Analyse,
 kein Tracking und keine Übertragung an Dritte darüber hinaus statt.
+
+Eine **Zusammenfassung** schickt den Transkript-Text (nicht das Audio) über OpenRouter an
+DeepSeek V4.1 Flash – nur auf ausdrücklichen Tipp, und nur an Anbieter, die laut OpenRouter weder
+mit den Daten trainieren noch sie speichern.
 
 Per „Zwischenspeichern" geparkte Sprachnachrichten liegen bis zur Transkription, höchstens aber
 24 Stunden, unter `filesDir/pending/` – ebenfalls privat und vom Backup ausgenommen.
