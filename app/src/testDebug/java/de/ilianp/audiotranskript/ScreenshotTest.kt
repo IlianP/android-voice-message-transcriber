@@ -181,7 +181,7 @@ class ScreenshotTest {
         // No shared URI: this is the app being opened from the launcher, which used to show
         // nothing but the empty state.
         composeRule.setContent { AppScreen(sharedUris = emptyList()) }
-        composeRule.waitForIdle()
+        awaitHistoryLoaded("Donnerstag")
 
         capture("06-verlauf-letzte-nachricht-wiederhergestellt")
         composeRule.onNodeWithText("Donnerstag", substring = true).assertExists()
@@ -201,7 +201,7 @@ class ScreenshotTest {
         registerPlayableAudio(history)
 
         composeRule.setContent { AppScreen(sharedUris = emptyList()) }
-        composeRule.waitForIdle()
+        awaitHistoryLoaded("Verlauf (3)")
 
         composeRule.onNodeWithText("Verlauf (3)").performClick()
         composeRule.waitForIdle()
@@ -221,7 +221,7 @@ class ScreenshotTest {
         assertTrue("Audio-Kopie nicht loeschbar", File(history.audioUri(entry)!!.path!!).delete())
 
         composeRule.setContent { AppScreen(sharedUris = emptyList()) }
-        composeRule.waitForIdle()
+        awaitHistoryLoaded("Donnerstag")
 
         composeRule.onNodeWithText("Donnerstag", substring = true).assertExists()
         composeRule.onNodeWithText("Audio nicht mehr vorhanden", substring = true).assertExists()
@@ -480,6 +480,17 @@ class ScreenshotTest {
     }
 
     // ---- capture helpers ----------------------------------------------------------------
+
+    /**
+     * The history is read on [kotlinx.coroutines.Dispatchers.IO], which `waitForIdle()` does not
+     * wait for - so a screen restored from it has to be waited for by its content.
+     */
+    private fun awaitHistoryLoaded(text: String) {
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText(text, substring = true)).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.waitForIdle()
+    }
 
     private fun capture(name: String) {
         val view = composeRule.activity.window.decorView

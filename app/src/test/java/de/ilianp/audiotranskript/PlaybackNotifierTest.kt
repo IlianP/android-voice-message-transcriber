@@ -125,11 +125,38 @@ class PlaybackNotifierTest {
         assertTrue(notificationManager().activeNotifications.isEmpty())
     }
 
+    @Test
+    fun `a notification left behind by a reclaimed process goes away on a tap`() {
+        controller.togglePlayPause()
+        controller.togglePlayPause()
+        // What survives of the old process: its notification, but no player behind it.
+        val leftOver = notificationManager().activeNotifications.single().notification
+        notifier.release()
+        notificationManager().notify(PlaybackNotifier.NOTIFICATION_ID, leftOver)
+
+        press(PLAY_PAUSE)
+
+        assertTrue(notificationManager().activeNotifications.isEmpty())
+    }
+
+    @Test
+    fun `a new player clears a notification left behind`() {
+        controller.togglePlayPause()
+        controller.togglePlayPause()
+        val leftOver = notificationManager().activeNotifications.single().notification
+        notifier.release()
+        notificationManager().notify(PlaybackNotifier.NOTIFICATION_ID, leftOver)
+
+        notifier = PlaybackNotifier(context, controller)
+
+        assertTrue(notificationManager().activeNotifications.isEmpty())
+    }
+
     private fun notificationManager() =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
     private fun press(action: String) {
-        context.sendBroadcast(Intent(action).setPackage(context.packageName))
+        context.sendBroadcast(Intent(context, PlaybackActionReceiver::class.java).setAction(action))
         idle()
     }
 

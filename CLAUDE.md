@@ -65,6 +65,9 @@ App im Hintergrund keinen Vordergrunddienst starten (z. B. Weiterspielen nach ei
 `PlaybackService.start` fängt das ab, dann wird die Benachrichtigung normal gepostet und die
 Wiedergabe läuft trotzdem. Die Tasten kommen ab Android 13 aus den Custom Actions der Session
 (Reihenfolge = Platz), davor aus den Notification-Actions; beide landen in `PlaybackNotifier.handle`.
+Die Notification-Actions gehen an den **Manifest**-Receiver `PlaybackActionReceiver`, nicht an einen
+dynamisch registrierten: eine pausierte Benachrichtigung kann den Prozess überleben, und ohne Player
+dahinter nimmt der Receiver sie dann weg (ebenso jeder neue `PlaybackNotifier` beim Start).
 Robolectric leitet Befehle eines `MediaControllerCompat` nicht an die Session weiter, deshalb testet
 `PlaybackNotifierTest` die Tasten über die Broadcasts.
 

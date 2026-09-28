@@ -3,10 +3,8 @@ package de.ilianp.audiotranskript
 import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.os.Bundle
 import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
@@ -15,7 +13,6 @@ import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 
 /** How far the notification's skip buttons jump - shorter than the app's ±10 s, as asked for. */
@@ -95,14 +92,11 @@ class PlaybackNotifier(context: Context, private val controller: MessagePlayerCo
         setCallback(sessionCallback)
     }
 
-    // Android 12 and older lay the notification out from its own buttons, which send these.
-    private val receiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            intent.action?.let(::handle)
-        }
-    }
-
     init {
+        // A new player means the one before is gone. A notification still standing now was left
+        // behind by a process Android reclaimed while paused, and its buttons lead nowhere.
+        manager.cancel(NOTIFICATION_ID)
+
         manager.createNotificationChannel(
             NotificationChannelCompat.Builder(CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
                 .setName("Wiedergabe")
@@ -110,11 +104,6 @@ class PlaybackNotifier(context: Context, private val controller: MessagePlayerCo
                 .setShowBadge(false)
                 .build(),
         )
-        val filter = IntentFilter().apply {
-            listOf(ACTION_REWIND, ACTION_PLAY_PAUSE, ACTION_FORWARD, ACTION_SLOWER, ACTION_FASTER, ACTION_DISMISSED)
-                .forEach(::addAction)
-        }
-        ContextCompat.registerReceiver(this.context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         controller.onChange = ::update
         active = this
     }
@@ -122,7 +111,6 @@ class PlaybackNotifier(context: Context, private val controller: MessagePlayerCo
     fun release() {
         controller.onChange = null
         if (active === this) active = null
-        context.unregisterReceiver(receiver)
         hide()
         session.release()
     }
@@ -202,7 +190,8 @@ class PlaybackNotifier(context: Context, private val controller: MessagePlayerCo
             .build()
     }
 
-    private fun handle(action: String) {
+    /** One button, from the notification (via [PlaybackActionReceiver]) or the media session. */
+    internal fun handle(action: String) {
         when (action) {
             ACTION_REWIND -> controller.skip(-NOTIFICATION_SKIP_MS)
             ACTION_FORWARD -> controller.skip(NOTIFICATION_SKIP_MS)
@@ -283,7 +272,7 @@ class PlaybackNotifier(context: Context, private val controller: MessagePlayerCo
     private fun broadcast(action: String): PendingIntent = PendingIntent.getBroadcast(
         context,
         0,
-        Intent(action).setPackage(context.packageName),
+        Intent(context, PlaybackActionReceiver::class.java).setAction(action),
         PendingIntent.FLAG_IMMUTABLE,
     )
 

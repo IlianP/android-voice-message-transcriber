@@ -64,5 +64,11 @@
             android:name=".PlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Tasten der Wiedergabe-Benachrichtigung; im Manifest, weil die Benachrichtigung den
+             App-Prozess überleben kann (siehe PlaybackActionReceiver). -->
+        <receiver
+            android:name=".PlaybackActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>
