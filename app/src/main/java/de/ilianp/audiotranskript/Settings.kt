@@ -59,6 +59,19 @@ class Settings(context: Context) {
             prefs.edit().putFloat(KEY_SPEED, value).apply()
         }
 
+    /** How much of the history to keep - see [TranscriptHistory]. */
+    var historyLimits: HistoryLimits
+        get() = HistoryLimits(
+            maxEntries = prefs.getInt(KEY_HISTORY_ENTRIES, HistoryLimits.DEFAULT_MAX_ENTRIES),
+            maxAgeDays = prefs.getInt(KEY_HISTORY_DAYS, HistoryLimits.DEFAULT_MAX_AGE_DAYS),
+        )
+        set(value) {
+            prefs.edit()
+                .putInt(KEY_HISTORY_ENTRIES, value.maxEntries)
+                .putInt(KEY_HISTORY_DAYS, value.maxAgeDays)
+                .apply()
+        }
+
     companion object {
         private const val SECURE_FILE = "settings_secure"
         private const val LEGACY_FILE = "settings"
@@ -69,6 +82,8 @@ class Settings(context: Context) {
         private const val KEY_LEGACY_FAL = "fal_api_key"
         private const val KEY_LANG = "language"
         private const val KEY_SPEED = "playback_speed"
+        private const val KEY_HISTORY_ENTRIES = "history_max_entries"
+        private const val KEY_HISTORY_DAYS = "history_max_days"
 
         /**
          * Opens the encrypted store, and recreates it if — and only if — the existing file is

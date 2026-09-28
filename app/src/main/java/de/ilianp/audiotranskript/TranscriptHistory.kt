@@ -35,6 +35,28 @@ data class HistoryEntry(
 )
 
 /**
+ * How much of the history is kept: at most [maxEntries] entries, none older than [maxAgeDays].
+ * Set by the user in the settings; the choices on offer are [ENTRY_CHOICES] and [DAY_CHOICES].
+ */
+data class HistoryLimits(
+    val maxEntries: Int = DEFAULT_MAX_ENTRIES,
+    val maxAgeDays: Int = DEFAULT_MAX_AGE_DAYS,
+) {
+    val maxAgeMs: Long get() = TimeUnit.DAYS.toMillis(maxAgeDays.toLong())
+
+    companion object {
+        const val DEFAULT_MAX_ENTRIES = 10
+        const val DEFAULT_MAX_AGE_DAYS = 7
+
+        /** Steps offered for the entry count - a plain +1 would take ages to get anywhere. */
+        val ENTRY_CHOICES = listOf(5, 10, 20, 30, 50, 100)
+
+        /** Steps offered for the retention, in days. */
+        val DAY_CHOICES = listOf(1, 3, 7, 14, 30, 90, 365)
+    }
+}
+
+/**
  * Keeps the last few transcriptions - text and audio - in the app's private storage.
  *
  * The audio has to be copied: a voice message shared from WhatsApp arrives as a `content://`
@@ -43,10 +65,14 @@ data class HistoryEntry(
  * without a copy, a restored transcript would have nothing left to play. The bytes are already
  * in memory for the upload, which is why [add] takes the [AudioPayload] rather than the URI.
  *
- * Kept deliberately small: at most [MAX_ENTRIES] entries, none older than [MAX_AGE_MS]. Every
- * file operation is best-effort - a broken index costs the history, never the app.
+ * Kept as small as the user's [HistoryLimits] say, read through [limits] on every access so a
+ * change in the settings applies on the next read. Every file operation is best-effort - a
+ * broken index costs the history, never the app.
  */
-class TranscriptHistory(private val context: Context) {
+class TranscriptHistory(
+    private val context: Context,
+    private val limits: () -> HistoryLimits = { HistoryLimits() },
+) {
 
     private val dir: File get() = File(context.filesDir, DIR_NAME)
     private val indexFile: File get() = File(dir, INDEX_NAME)
@@ -128,6 +154,28 @@ class TranscriptHistory(private val context: Context) {
     /** The stored audio of a single-message entry, or null if it has none (any more). */
     fun audioUri(entry: HistoryEntry): Uri? = audioUris(entry).firstOrNull()
 
+    /** Drops the entry [id] and its audio, and returns the resulting history. */
+    fun delete(id: String, now: Long = System.currentTimeMillis()): List<HistoryEntry> = synchronized(LOCK) {
+        val existing = entries(now)
+        if (existing.none { it.id == id }) return existing
+        // prune() sweeps the audio that no entry refers to any more - this one's included.
+        val updated = prune(existing.filterNot { it.id == id }, now)
+        write(updated)
+        updated
+    }
+
+    /** How many of the stored entries [newLimits] would drop - for a warning before they do. */
+    fun countDroppedBy(newLimits: HistoryLimits, now: Long = System.currentTimeMillis()): Int =
+        synchronized(LOCK) {
+            val current = entries(now)
+            current.size - keep(current, newLimits, now).size
+        }
+
+    /** Bytes the history takes up on disk, audio copies and index together. */
+    fun storageBytes(): Long = synchronized(LOCK) {
+        runCatching { dir.listFiles()?.sumOf { it.length() } ?: 0L }.getOrDefault(0L)
+    }
+
     /** Drops every entry and its audio. */
     fun clear() = synchronized(LOCK) {
         runCatching { dir.deleteRecursively() }
@@ -138,13 +186,16 @@ class TranscriptHistory(private val context: Context) {
     // ---- storage ------------------------------------------------------------------------
 
     private fun prune(entries: List<HistoryEntry>, now: Long): List<HistoryEntry> {
-        val kept = entries
-            .sortedByDescending { it.createdAt }
-            .filter { now - it.createdAt <= MAX_AGE_MS }
-            .take(MAX_ENTRIES)
+        val kept = keep(entries, limits(), now)
         deleteUnreferencedAudio(kept)
         return kept
     }
+
+    private fun keep(entries: List<HistoryEntry>, limits: HistoryLimits, now: Long): List<HistoryEntry> =
+        entries
+            .sortedByDescending { it.createdAt }
+            .filter { now - it.createdAt <= limits.maxAgeMs }
+            .take(limits.maxEntries)
 
     /** Sweeps audio left behind by expired entries, and by runs that died before indexing. */
     private fun deleteUnreferencedAudio(kept: List<HistoryEntry>) {
@@ -239,12 +290,6 @@ class TranscriptHistory(private val context: Context) {
          * operation below takes this, and the index and the audio files stay in step.
          */
         private val LOCK = Any()
-
-        /** How many transcriptions are kept before the oldest one drops out. */
-        const val MAX_ENTRIES = 10
-
-        /** How long an entry (and its audio) survives, counted from the transcription. */
-        val MAX_AGE_MS: Long = TimeUnit.DAYS.toMillis(7)
 
         private const val TAG = "AudioTranskript"
         private const val DIR_NAME = "history"

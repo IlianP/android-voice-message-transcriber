@@ -22,8 +22,10 @@ Kommentar dort, falls das mal wieder auffällt.
 
 ## Verlauf (Persistenz)
 
-`TranscriptHistory.kt` hält die letzten 10 Transkriptionen (max. 7 Tage) in
-`filesDir/history/`. Das Audio muss **kopiert** werden: die `content://`-URI aus
+`TranscriptHistory.kt` hält die letzten Transkriptionen in `filesDir/history/` – wie viele und
+wie lange, steht in `HistoryLimits` (Einstellungen, Standard 10 / 7 Tage). Die Grenzen liest die
+History über ein Lambda bei jedem Zugriff; der Einstellungsbildschirm speichert sie erst beim
+Verlassen, damit `countDroppedBy` vorher warnen kann, statt dass schon das Durchklicken löscht. Das Audio muss **kopiert** werden: die `content://`-URI aus
 einem `ACTION_SEND` trägt nur eine befristete, nicht persistierbare Lese-
 berechtigung — ein `takePersistableUriPermission` gibt es dafür nicht. Deshalb
 reicht `WizperClient` den bereits gelesenen `AudioPayload` an den Aufrufer durch,
@@ -37,6 +39,16 @@ sondern zusammen mit einem hochzählenden `deliveryId`: Compose-State vergleicht
 über `equals`, und dieselbe Nachricht zweimal geteilt sähe sonst wie „keine
 Änderung" aus und würde still ignoriert. Der Verlauf ist in `backup_rules.xml` /
 `data_extraction_rules.xml` vom Cloud-Backup ausgenommen.
+
+## Einstellungen
+
+`SettingsScreen.kt` ist keine eigene Activity, sondern wird in `AppScreen` per `settingsOpen`
+anstelle des Hauptbildschirms gezeichnet (per frühem `return`, `BackHandler` zum Schließen). So
+bleiben Player, laufende Transkription und Zustand des Hauptbildschirms einfach in `AppScreen`
+liegen; der `scrollState` ist dafür nach oben gezogen. Keys und Sprache speichern beim Tippen.
+Beim Schließen liest `closeSettings` die Keys getrimmt zurück und wendet neue Verlaufs-Grenzen an;
+fällt dabei (oder durch Löschen per langem Druck) der Eintrag weg, der gerade zu sehen ist, räumt
+`dropIfGone` den Bildschirm – dessen Audio-Kopie ist dann gelöscht.
 
 ## Stapel: „Zwischenspeichern" / „Transkript starten"
 

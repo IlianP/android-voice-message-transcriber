@@ -31,9 +31,11 @@ und **parallel Anhören**.
 - **Zusammenfassung** auf Wunsch (siehe [Zusammenfassung](#zusammenfassung)): ab 2 Minuten
   Gesamtdauer bietet die App sie von selbst an, bei kürzeren Nachrichten reicht ein Tipp auf
   „Zusammenfassung erstellen". Läuft über denselben OpenRouter-Key.
-- **Verlauf**: die letzten 10 Transkriptionen bleiben samt Audio auf dem Gerät (höchstens
-  sieben Tage). Beim Öffnen aus dem App-Drawer ist die zuletzt transkribierte Nachricht
-  wieder da, ältere holt man über die Liste zurück – jeweils ohne erneuten API-Aufruf.
+- **Verlauf**: die letzten Transkriptionen bleiben samt Audio auf dem Gerät – wie viele und wie
+  lange, stellt man in den Einstellungen ein (Standard: 10 Einträge, 7 Tage). Beim Öffnen aus
+  dem App-Drawer ist die zuletzt transkribierte Nachricht wieder da, ältere holt man über die
+  Liste zurück – jeweils ohne erneuten API-Aufruf. Langes Drücken auf einen Eintrag löscht ihn
+  (mit Rückfrage).
 - **Eigener Eintrag in der Übersicht der laufenden Apps** – auch wenn die App aus einer
   Sprachnachricht heraus geöffnet wurde.
 - Sprache wählbar: automatisch / Deutsch / Englisch.
@@ -44,12 +46,17 @@ und **parallel Anhören**.
 Keys trägt man einmal ein, danach geht es nur noch um Transkript und Player. Der Bildschirm ist
 entsprechend sortiert:
 
-1. **Einstellungen** – flache, zuklappbare Zeile ganz oben. Standardmäßig zugeklappt; sie zeigt
-   dann nur eine Zusammenfassung („MAI-Transcribe-2 · Deutsch"). Aufgeklappt startet sie nur,
-   wenn noch kein Key gesetzt ist, und klappt sich nach dem Speichern wieder weg.
-2. **Verlauf** – ebenfalls zugeklappt, erscheint erst, wenn etwas gespeichert ist. Zeigt
-   zugeklappt nur das Alter der letzten Nachricht; aufgeklappt eine Liste, aus der sich jede
-   gespeicherte Nachricht mit Text und Audio zurückholen lässt.
+1. **Kopfzeile** – eine einzige Zeile: links der zugeklappte **Verlauf** („Verlauf (3) · vor
+   5 Minuten"), rechts ein Ordner-Symbol („Audiodatei auswählen") und das Zahnrad für die
+   **Einstellungen**. Kein App-Titel, keine Einstellungszeile – der Platz gehört dem Transkript.
+   Aufgeklappt zeigt der Verlauf eine Liste, aus der sich jede gespeicherte Nachricht mit Text
+   und Audio zurückholen lässt; langes Drücken bietet das Löschen des Eintrags an. Solange noch
+   kein Key gesetzt ist, steht darunter eine Karte „Einstellungen öffnen".
+2. **Einstellungen** (`SettingsScreen.kt`) – ein eigener Bildschirm hinter dem Zahnrad, statt einer
+   aufklappbaren Zeile: API-Keys, Sprache, Verlaufs-Grenzen (Anzahl, Tage), belegter Speicher und
+   „Verlauf löschen". Keys und Sprache werden beim Tippen gespeichert. Die Verlaufs-Grenzen gelten
+   erst beim Verlassen – vorher zeigt der Bildschirm, wie viele Einträge dadurch wegfallen würden,
+   und das Durchklicken der Stufen löscht nichts auf dem Weg.
 3. **Zusammenfassung** – direkt über dem Transkript, nur mit OpenRouter-Key: als Angebot, als
    aufklappbare Karte mit Stichpunkten oder, bei kurzen Nachrichten, als schlichter Textknopf.
 4. **Transkript** – der eigentliche Inhalt, mit Kopieren / Teilen / Neu. Scrollt frei.
@@ -71,8 +78,8 @@ persistierbare Berechtigung). Ohne Kopie gäbe es beim Zurückholen also nichts 
 Die Bytes liegen für den Upload ohnehin schon im Speicher, deshalb reicht `WizperClient` sie als
 `AudioPayload` durch, statt die Datei ein zweites Mal zu lesen.
 
-Aufgeräumt wird beim Lesen und Schreiben: höchstens `MAX_ENTRIES` (10) Einträge, nichts älter als
-`MAX_AGE_MS` (7 Tage), und Audiodateien, auf die kein Eintrag mehr zeigt, verschwinden mit. Wird
+Aufgeräumt wird beim Lesen und Schreiben nach den `HistoryLimits` aus den Einstellungen
+(Standard 10 Einträge / 7 Tage, wählbar in Stufen bis 100 Einträge / 365 Tage), und Audiodateien, auf die kein Eintrag mehr zeigt, verschwinden mit. Wird
 dieselbe Nachricht erneut transkribiert, ersetzt das ihren Eintrag (erkannt am SHA-256 der Audio-
 Bytes), statt eine zweite Kopie anzulegen.
 
@@ -115,8 +122,8 @@ unter dem App-Symbol, so wie bei Dropbox:
 
 Ablauf also: alle bis auf die letzte Nachricht mit „Zwischenspeichern" teilen, die letzte mit
 „Transkript starten". Werden mehrere Nachrichten auf einmal markiert und geteilt
-(`ACTION_SEND_MULTIPLE`), ist das ebenfalls ein Stapel; auch „Audiodatei auswählen" nimmt mehrere
-Dateien.
+(`ACTION_SEND_MULTIPLE`), ist das ebenfalls ein Stapel; auch „Audiodatei auswählen" (Ordner-Symbol
+oben) nimmt mehrere Dateien.
 
 **Transkription:** ein Request pro Nachricht (höchstens drei gleichzeitig), kein Zusammenschneiden
 von Audio. Das Ergebnis ist *ein* Transkript: auf dem Bildschirm mit einer Überschrift „Nachricht
@@ -182,11 +189,12 @@ und verschwindet, wenn die Nachricht zu Ende gehört ist oder der Bildschirm den
 
 ```
 app/src/main/java/de/ilianp/audiotranskript/
-├── MainActivity.kt      # UI (Compose): Scaffold, zuklappbare Einstellungen, Verlauf, Transkriptions-Panel
+├── MainActivity.kt      # UI (Compose): Scaffold, Kopfzeile mit Verlauf, Transkriptions-Panel
+├── SettingsScreen.kt    # Einstellungen hinter dem Zahnrad: Keys, Sprache, Verlaufs-Grenzen
 ├── MessagePlayer.kt     # ▶️ Audio-Player mit Tempo 1×–2,5×, fix am unteren Rand
 ├── PlaybackNotifier.kt  # Media-Session + Wiedergabe-Benachrichtigung (±5 s, Tempo)
 ├── PlaybackService.kt   # Vordergrunddienst, hält die Benachrichtigung während der Wiedergabe
-├── TranscriptHistory.kt # Verlauf: Transkripte + Audiokopien in filesDir, 10 Einträge / 7 Tage
+├── TranscriptHistory.kt # Verlauf: Transkripte + Audiokopien in filesDir, Grenzen einstellbar
 ├── PendingQueue.kt      # „Zwischenspeichern": geparkte Nachrichten bis zur letzten
 ├── QueueShareActivity.kt # unsichtbares Teilen-Ziel „Zwischenspeichern"
 ├── WizperClient.kt      # Orchestrierung: OpenRouter, dann Groq, dann Soniox
@@ -304,9 +312,10 @@ wo kein Gerät und kein KVM verfügbar ist. Der Ablauf ist der echte: der Transk
 gegen einen `MockWebServer` (über `OpenRouterClient.baseUrl`), der Player bekommt über
 `ShadowMediaPlayer` eine Dauer, und die Einstellungen kommen aus den echten `SharedPreferences`.
 
-Abgedeckte Zustände: Erststart mit offenen Einstellungen, zugeklappte Einstellungen mit
-Zusammenfassung, wieder aufgeklappt per Klick, Transkript mit fixierter Player-Leiste sowie der
-gescrollte Zustand. Die Bilder sind Review-Artefakte, keine Golden Files – geprüft wird per
+Abgedeckte Zustände: Erststart ohne Key, Kopfzeile, Einstellungsbildschirm (auch mit Warnung
+beim Kürzen des Verlaufs), Verlaufsliste und Löschen per langem Druck, Transkript mit fixierter
+Player-Leiste sowie der gescrollte Zustand. Dialoge laufen in einem eigenen Fenster und fehlen
+deshalb auf den Bildern; sie werden per Assertion geprüft. Die Bilder sind Review-Artefakte, keine Golden Files – geprüft wird per
 Assertion nur, was ein Bild allein nicht zeigt, etwa dass die letzte Inhaltszeile über der
 Player-Leiste endet und nicht dahinter verschwindet.
 
@@ -333,8 +342,9 @@ damit Tests sie umbiegen können.
 
 ## Einrichtung
 
-Beim ersten Start in den Feldern oben einen **Groq-API-Key** (und optional einen
-**Soniox-API-Key**) eintragen und speichern. Danach eine Sprachnachricht aus einer anderen
+Beim ersten Start über „Einstellungen öffnen" (oder das Zahnrad oben rechts) einen
+**OpenRouter-API-Key** eintragen, optional Groq und Soniox als Fallback – gespeichert wird
+beim Tippen. Danach eine Sprachnachricht aus einer anderen
 App mit „Audio-Transkript" teilen.
 
 Die Keys werden ausschließlich in der App eingegeben und verschlüsselt auf dem Gerät
@@ -358,6 +368,7 @@ Per „Zwischenspeichern" geparkte Sprachnachrichten liegen bis zur Transkriptio
 
 Für den Verlauf speichert die App Transkripte **und Kopien der Sprachnachrichten** im privaten
 App-Verzeichnis (`filesDir/history/`), auf das andere Apps keinen Zugriff haben. Beides wird nach
-sieben Tagen automatisch gelöscht, spätestens aber wenn der elfte Eintrag dazukommt; „Verlauf
-löschen" räumt sofort alles weg. Vom Cloud-Backup und von der Geräteübertragung ist das
+der eingestellten Zeit automatisch gelöscht (Standard sieben Tage), spätestens aber wenn die
+eingestellte Anzahl überschritten ist (Standard zehn); langes Drücken löscht einen einzelnen
+Eintrag, „Verlauf löschen" in den Einstellungen räumt sofort alles weg. Vom Cloud-Backup und von der Geräteübertragung ist das
 Verzeichnis ausgenommen. Beim Deinstallieren verschwindet es mit den übrigen App-Daten.

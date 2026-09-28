@@ -81,17 +81,17 @@ class TranscriptHistoryTest {
     @Test
     fun `only the newest entries are kept, and the audio of the rest is deleted`() {
         val now = System.currentTimeMillis()
-        repeat(TranscriptHistory.MAX_ENTRIES + 3) { i ->
+        repeat(HistoryLimits.DEFAULT_MAX_ENTRIES + 3) { i ->
             history.add("Nachricht $i", payload(i.toByte()), now - (100L - i) * 1000L)
         }
 
         val entries = history.entries(now)
-        assertEquals(TranscriptHistory.MAX_ENTRIES, entries.size)
+        assertEquals(HistoryLimits.DEFAULT_MAX_ENTRIES, entries.size)
         assertEquals("Nachricht 12", entries.first().transcript)
         assertFalse(entries.any { it.transcript == "Nachricht 0" })
         assertEquals(
             "Verwaiste Audiodateien liegen noch da",
-            TranscriptHistory.MAX_ENTRIES,
+            HistoryLimits.DEFAULT_MAX_ENTRIES,
             storedAudioFiles().size,
         )
     }
@@ -99,11 +99,62 @@ class TranscriptHistoryTest {
     @Test
     fun `entries past the retention window disappear on the next read`() {
         val now = System.currentTimeMillis()
-        history.add("uralt", payload(1), now - TranscriptHistory.MAX_AGE_MS - 1000L)
+        history.add("uralt", payload(1), now - HistoryLimits().maxAgeMs - 1000L)
         history.add("frisch", payload(2), now)
 
         assertEquals(listOf("frisch"), history.entries(now).map { it.transcript })
         assertEquals(1, storedAudioFiles().size)
+    }
+
+    @Test
+    fun `the limits from the settings apply on the next read`() {
+        val now = System.currentTimeMillis()
+        var limits = HistoryLimits(maxEntries = 30, maxAgeDays = 30)
+        val configured = TranscriptHistory(context) { limits }
+        repeat(15) { i ->
+            configured.add("Nachricht $i", payload(i.toByte()), now - TimeUnit.DAYS.toMillis(14L - i))
+        }
+        // More than the default would keep, both in number and in age.
+        assertEquals(15, configured.entries(now).size)
+
+        limits = HistoryLimits(maxEntries = 5, maxAgeDays = 3)
+        val kept = configured.entries(now)
+
+        // Newer than three days are only Nachricht 11 to 14, so age cuts deeper than count here.
+        assertEquals(listOf("Nachricht 14", "Nachricht 13", "Nachricht 12", "Nachricht 11"), kept.map { it.transcript })
+        assertEquals("Audio der verworfenen Einträge liegt noch da", 4, storedAudioFiles().size)
+    }
+
+    @Test
+    fun `tighter limits are counted before they drop anything`() {
+        val now = System.currentTimeMillis()
+        repeat(6) { i -> history.add("Nachricht $i", payload(i.toByte()), now - i * 1000L) }
+
+        assertEquals(1, history.countDroppedBy(HistoryLimits(maxEntries = 5), now))
+        assertEquals(0, history.countDroppedBy(HistoryLimits(maxEntries = 20), now))
+        // Counting is only a look ahead: nothing is gone yet.
+        assertEquals(6, history.entries(now).size)
+    }
+
+    @Test
+    fun `deleting one entry takes its audio and leaves the rest`() {
+        val now = System.currentTimeMillis()
+        history.add("bleibt", payload(1), now - 1000L)
+        val doomed = history.add(listOf("geht", "auch weg"), listOf(payload(2), payload(3)), now).first()
+
+        val remaining = history.delete(doomed.id, now)
+
+        assertEquals(listOf("bleibt"), remaining.map { it.transcript })
+        assertEquals(listOf("bleibt"), TranscriptHistory(context).entries(now).map { it.transcript })
+        assertEquals(1, storedAudioFiles().size)
+    }
+
+    @Test
+    fun `the storage size counts the audio copies`() {
+        assertEquals(0L, history.storageBytes())
+        history.add("mit Audio", payload(1))
+        // 32 bytes of audio plus the index.
+        assertTrue(history.storageBytes() > 32L)
     }
 
     @Test
