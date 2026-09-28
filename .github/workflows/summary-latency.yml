@@ -1,0 +1,33 @@
+name: Zusammenfassung – Latenzmessung
+
+# Einmalige Messung, nur von Hand ueber "Run workflow" - laeuft bei keinem PR und keinem
+# Release mit. Vergleicht die Wartezeit der Zusammenfassung (SummaryClient.kt) mit
+# schnelleren Varianten; Ergebnis steht in der Zusammenfassung des Laufs.
+#
+# Braucht das Repository-Secret OPENROUTER_API_KEY; GROQ_API_KEY ist optional und
+# schaltet die Variante "direkt bei Groq" zu. Liegt unter .github/, loest also
+# (paths-ignore in release.yml) kein Release aus.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Durchlaeufe pro Variante
+        default: '3'
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Messen
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          python3 .github/scripts/summary_latency.py --runs "$RUNS" --show-text | tee out.txt
+          sed -n '/^## Ergebnis/,$p' out.txt >> "$GITHUB_STEP_SUMMARY"
