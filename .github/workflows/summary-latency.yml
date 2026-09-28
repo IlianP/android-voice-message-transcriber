@@ -1,18 +1,21 @@
-name: Zusammenfassung – Latenzmessung
+name: Zusammenfassung – Latenz- und Qualitätsvergleich
 
 # Einmalige Messung, nur von Hand ueber "Run workflow" - laeuft bei keinem PR und keinem
-# Release mit. Vergleicht die Wartezeit der Zusammenfassung (SummaryClient.kt) mit
-# schnelleren Varianten; Ergebnis steht in der Zusammenfassung des Laufs.
+# Release mit. Vergleicht die Zusammenfassung (SummaryClient.kt) mit Varianten ohne Reasoning,
+# anderem Routing und anderen guenstigen Modellen, an Texten verschiedener Laenge. Die Tabellen
+# stehen in der Zusammenfassung des Laufs, alle erzeugten Texte haengen als Artefakt dran.
 #
-# Braucht das Repository-Secret OPENROUTER_API_KEY; GROQ_API_KEY ist optional und
-# schaltet die Variante "direkt bei Groq" zu. Liegt unter .github/, loest also
+# Braucht das Repository-Secret OPENROUTER_API_KEY. Liegt unter .github/, loest also
 # (paths-ignore in release.yml) kein Release aus.
 on:
   workflow_dispatch:
     inputs:
       runs:
-        description: Durchlaeufe pro Variante
+        description: Durchlaeufe pro Variante und Text
         default: '3'
+      only:
+        description: Nur diese Varianten (Kennbuchstaben, z. B. ABC) - leer fuer alle
+        default: ''
 
 permissions:
   contents: read
@@ -20,14 +23,22 @@ permissions:
 jobs:
   measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Messen
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           RUNS: ${{ inputs.runs }}
+          ONLY: ${{ inputs.only }}
         run: |
-          python3 .github/scripts/summary_latency.py --runs "$RUNS" --show-text | tee out.txt
-          sed -n '/^## Ergebnis/,$p' out.txt >> "$GITHUB_STEP_SUMMARY"
+          python3 .github/scripts/summary_latency.py --runs "$RUNS" ${ONLY:+--only "$ONLY"} \
+            --out zusammenfassungen.md | tee out.txt
+          sed -n '/^## Geschwindigkeit/,/^Alle Zusammenfassungen/p' out.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Zusammenfassungen sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zusammenfassungen
+          path: zusammenfassungen.md
+          retention-days: 30
