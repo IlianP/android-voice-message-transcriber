@@ -55,6 +55,22 @@ spielt die Dateien als eine durchgehende Zeitleiste. Ein Stapel ist im Verlauf e
 (`audioFileNames`/`segments`); alte Einträge mit einzelnem `audio`-Feld werden weiter gelesen.
 Ideen für später stehen in `ROADMAP.md`.
 
+## Wiedergabe-Benachrichtigung
+
+`PlaybackNotifier` (Media-Session + `MediaStyle`) hängt über `onChange` am
+`MessagePlayerController` und lebt so lange wie dieser (`rememberMessagePlayer`). `PlaybackService`
+spielt selbst nichts ab, er hält nur die Benachrichtigung im Vordergrund – und nur **während** der
+Wiedergabe; bei Pause `STOP_FOREGROUND_DETACH`, damit sie wegwischbar wird. Ab Android 12 darf eine
+App im Hintergrund keinen Vordergrunddienst starten (z. B. Weiterspielen nach einem Anruf):
+`PlaybackService.start` fängt das ab, dann wird die Benachrichtigung normal gepostet und die
+Wiedergabe läuft trotzdem. Die Tasten kommen ab Android 13 aus den Custom Actions der Session
+(Reihenfolge = Platz), davor aus den Notification-Actions; beide landen in `PlaybackNotifier.handle`.
+Die Notification-Actions gehen an den **Manifest**-Receiver `PlaybackActionReceiver`, nicht an einen
+dynamisch registrierten: eine pausierte Benachrichtigung kann den Prozess überleben, und ohne Player
+dahinter nimmt der Receiver sie dann weg (ebenso jeder neue `PlaybackNotifier` beim Start).
+Robolectric leitet Befehle eines `MediaControllerCompat` nicht an die Session weiter, deshalb testet
+`PlaybackNotifierTest` die Tasten über die Broadcasts.
+
 ## Zusammenfassung
 
 `SummaryClient.kt` fasst ein Transkript über OpenRouter (`/chat/completions`) mit

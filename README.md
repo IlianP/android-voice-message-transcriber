@@ -23,6 +23,10 @@ und **parallel Anhören**.
     Alter, damit eine laufende Transkription nicht getroffen wird.
 - **▶️ Nachricht anhören** direkt beim Lesen, mit einstellbarem Tempo **1× / 1,5× / 2× / 2,5×**,
   Play/Pause, Fortschrittsleiste und Zeitanzeige.
+- **Wiedergabe-Benachrichtigung** wie bei Spotify & Co.: solange eine Nachricht läuft, steht sie
+  fest in der Benachrichtigungsleiste und auf dem Sperrbildschirm – mit Fortschrittsbalken,
+  Play/Pause, **±5 s** und zwei Tacho-Tasten für **langsamer / schneller**. Kopfhörer-Tasten
+  funktionieren ebenfalls.
 - Transkript **kopieren** / **teilen**, Text ist markierbar.
 - **Zusammenfassung** auf Wunsch (siehe [Zusammenfassung](#zusammenfassung)): ab 2 Minuten
   Gesamtdauer bietet die App sie von selbst an, bei kürzeren Nachrichten reicht ein Tipp auf
@@ -154,12 +158,34 @@ rendert die Bedienelemente als fixierte Leiste am unteren Bildschirmrand, sobald
 Sprachnachricht geteilt wurde. Das Tempo wird über `MediaPlayer.playbackParams.setSpeed(...)` gesetzt
 (API 23+). Damit lässt sich die Nachricht **gleichzeitig lesen und hören**.
 
+### Wiedergabe-Benachrichtigung
+
+`PlaybackNotifier.kt` spiegelt den Player in eine `MediaSessionCompat` und eine `MediaStyle`-
+Benachrichtigung. Sie erscheint beim ersten Abspielen – egal ob die App vorne ist oder minimiert –
+und verschwindet, wenn die Nachricht zu Ende gehört ist oder der Bildschirm den Player freigibt
+(neue Nachricht, App geschlossen).
+
+- **Tasten**: −5 s · Play/Pause · +5 s · langsamer · schneller. Die Tempo-Tasten sind ein Tacho mit
+  Zeiger nach links bzw. rechts und gehen die Stufen 1× → 2,5× durch; das aktuelle Tempo steht als
+  Untertitel („Tempo 1,5×") und wird wie ein Tipp in der App für die nächste Nachricht gemerkt.
+- **Ab Android 13** baut das System die Mediensteuerung aus der Session statt aus der
+  Benachrichtigung: ±5 s sind die ersten beiden Custom Actions und belegen damit die Plätze von
+  „zurück/weiter", die Tempo-Tasten die beiden Plätze danach. Der Fortschrittsbalken (ab Android 10)
+  kommt ebenfalls aus der Session und läuft mit dem Tempo mit, ohne dass die App ihn aktualisiert.
+- **Nicht wegwischbar, solange sie läuft**: `PlaybackService` hält die Benachrichtigung als
+  Vordergrunddienst (`mediaPlayback`) – das schützt eine lange Nachricht im Hintergrund auch davor,
+  dass Android die App beendet. Pausiert verlässt der Dienst den Vordergrund; die Benachrichtigung
+  bleibt zum Weiterhören stehen, lässt sich dann aber wegwischen.
+- Keine Berechtigungsabfrage: Medien-Benachrichtigungen sind von `POST_NOTIFICATIONS` ausgenommen.
+
 ## Projektstruktur
 
 ```
 app/src/main/java/de/ilianp/audiotranskript/
 ├── MainActivity.kt      # UI (Compose): Scaffold, zuklappbare Einstellungen, Verlauf, Transkriptions-Panel
 ├── MessagePlayer.kt     # ▶️ Audio-Player mit Tempo 1×–2,5×, fix am unteren Rand
+├── PlaybackNotifier.kt  # Media-Session + Wiedergabe-Benachrichtigung (±5 s, Tempo)
+├── PlaybackService.kt   # Vordergrunddienst, hält die Benachrichtigung während der Wiedergabe
 ├── TranscriptHistory.kt # Verlauf: Transkripte + Audiokopien in filesDir, 10 Einträge / 7 Tage
 ├── PendingQueue.kt      # „Zwischenspeichern": geparkte Nachrichten bis zur letzten
 ├── QueueShareActivity.kt # unsichtbares Teilen-Ziel „Zwischenspeichern"

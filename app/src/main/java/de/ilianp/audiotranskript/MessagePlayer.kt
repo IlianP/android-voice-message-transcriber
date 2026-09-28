@@ -53,6 +53,12 @@ enum class PlaybackSpeed(val factor: Float, val label: String) {
     X2(2.0f, "2×"),
     X2_5(2.5f, "2,5×");
 
+    /** One step down, or this one at the lowest - for the notification's slower button. */
+    fun slower(): PlaybackSpeed = entries.getOrElse(ordinal - 1) { this }
+
+    /** One step up, or this one at the highest - for the notification's faster button. */
+    fun faster(): PlaybackSpeed = entries.getOrElse(ordinal + 1) { this }
+
     companion object {
         fun fromFactor(factor: Float): PlaybackSpeed =
             entries.firstOrNull { it.factor == factor } ?: X1
@@ -100,6 +106,13 @@ class MessagePlayerController(
         private set
 
     val segmentCount: Int get() = uris.size
+
+    /**
+     * Told after every change that shows outside the app - play/pause, a jump, the speed - so
+     * that [PlaybackNotifier] can follow. Not for the position running on while playing: the
+     * system moves the notification's seek bar along by itself.
+     */
+    var onChange: (() -> Unit)? = null
 
     private val players = mutableListOf<MediaPlayer>()
     private val durations = IntArray(uris.size)
@@ -188,6 +201,7 @@ class MessagePlayerController(
                     }
                     durationMs = offset
                     isPrepared = true
+                    onChange?.invoke()
                 }
             }
             mp.setOnCompletionListener { onSegmentCompleted(index) }
@@ -195,6 +209,7 @@ class MessagePlayerController(
                 errorMessage = "Wiedergabe nicht möglich (Code $what/$extra)."
                 isPlaying = false
                 abandonAudioFocus()
+                onChange?.invoke()
                 true
             }
             players += mp
@@ -223,8 +238,8 @@ class MessagePlayerController(
 
     fun changeSpeed(newSpeed: PlaybackSpeed) {
         speed = newSpeed
-        val mp = current ?: return
-        if (isPlaying) applySpeed(mp)
+        current?.let { if (isPlaying) applySpeed(it) }
+        onChange?.invoke()
     }
 
     /** Seeks on the shared timeline, switching to whichever message holds [ms]. */
@@ -243,6 +258,7 @@ class MessagePlayerController(
             players[index].seekTo(local)
         }
         positionMs = clamped
+        onChange?.invoke()
     }
 
     /** Seeks [deltaMs] relative to the current position (clamped to the timeline's bounds). */
@@ -277,6 +293,7 @@ class MessagePlayerController(
             isPlaying = false
             positionMs = durationMs
             abandonAudioFocus()
+            onChange?.invoke()
         }
     }
 
@@ -296,12 +313,14 @@ class MessagePlayerController(
         mp.setVolume(1f, 1f)
         mp.start()
         isPlaying = true
+        onChange?.invoke()
     }
 
     private fun pausePlayback() {
         val mp = current ?: return
         if (mp.isPlaying) mp.pause()
         isPlaying = false
+        onChange?.invoke()
     }
 
     private fun requestAudioFocus(): Boolean {
@@ -348,8 +367,13 @@ fun rememberMessagePlayer(uris: List<Uri>): MessagePlayerController? {
     }
 
     DisposableEffect(controller) {
+        // Goes with the player: the notification is there as long as the message it controls.
+        val notifier = controller?.let { PlaybackNotifier(context, it) }
         controller?.prepare()
-        onDispose { controller?.release() }
+        onDispose {
+            notifier?.release()
+            controller?.release()
+        }
     }
 
     LaunchedEffect(controller, controller?.isPlaying) {

@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Wiedergabe-Benachrichtigung: hält die App im Vordergrund, solange eine Nachricht läuft. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <application
         android:allowBackup="true"
@@ -55,5 +58,17 @@
                 <data android:mimeType="audio/*" />
             </intent-filter>
         </activity>
+
+        <!-- Hält nur die Wiedergabe-Benachrichtigung, abgespielt wird in MessagePlayerController. -->
+        <service
+            android:name=".PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Tasten der Wiedergabe-Benachrichtigung; im Manifest, weil die Benachrichtigung den
+             App-Prozess überleben kann (siehe PlaybackActionReceiver). -->
+        <receiver
+            android:name=".PlaybackActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>
