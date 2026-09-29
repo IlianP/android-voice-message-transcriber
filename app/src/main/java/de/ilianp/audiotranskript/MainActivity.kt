@@ -325,14 +325,20 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
         }
     }
 
-    fun startTranscription(uris: List<Uri>) {
+    /**
+     * [resuming] is a run the recreation cut off, started again for the same batch: a summary the
+     * user already asked for stays asked for, instead of being dropped with the old transcript.
+     */
+    fun startTranscription(uris: List<Uri>, resuming: Boolean = false) {
         if (running || uris.isEmpty()) return
         running = true
         result = null
         segments = emptyList()
         error = null
         restoredAt = null
+        val keepRequest = resuming && summaryRequested
         resetSummary()
+        summaryRequested = keepRequest
         elapsedSeconds = 0
         doneCount = 0
         job = scope.launch {
@@ -421,7 +427,7 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     LaunchedEffect(Unit) {
         if (cutOffRun) {
             running = false
-            startTranscription(activeUris)
+            startTranscription(activeUris, resuming = true)
         }
     }
 

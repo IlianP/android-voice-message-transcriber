@@ -138,6 +138,24 @@ class SummaryClientTest {
     }
 
     @Test
+    fun `a stream cut off before its end marker fails instead of passing as complete`() = runTest {
+        val chunk = JSONObject().put(
+            "choices",
+            org.json.JSONArray().put(JSONObject().put("delta", JSONObject().put("content", "• Erster Punkt"))),
+        )
+        // One piece, then the connection closes - no [DONE].
+        server.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "text/event-stream")
+                .setBody("data: $chunk\n\n"),
+        )
+
+        val e = runCatching { SummaryClient.summarize(listOf("Hallo"), "key-1") }.exceptionOrNull()
+
+        assertTrue(e is WizperException)
+        assertTrue(e!!.message!!.contains("unvollständig"))
+    }
+
+    @Test
     fun `an empty stream fails instead of showing an empty summary`() = runTest {
         server.enqueue(sseResponse("  ", "\n"))
 

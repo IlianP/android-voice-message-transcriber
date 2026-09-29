@@ -582,6 +582,49 @@ class ScreenshotTest {
     }
 
     @Test
+    fun `a summary asked for during the transcription survives a rotation`() {
+        val uri = Uri.fromFile(audioFile)
+        ShadowMediaPlayer.addMediaInfo(
+            DataSource.toDataSource(context, uri),
+            ShadowMediaPlayer.MediaInfo(225_000, 0),
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.path.orEmpty().endsWith("/chat/completions")) {
+                    streamed(listOf("• Vorschlag: Freitag früh"))
+                } else {
+                    MockResponse()
+                        .setHeader("Content-Type", "application/json")
+                        .setBody(JSONObject().put("text", longTranscript).toString())
+                        .setBodyDelay(2, TimeUnit.SECONDS)
+                }
+        }
+
+        val restoration = StateRestorationTester(composeRule)
+        restoration.setContent { AppScreen(sharedUris = listOf(uri), shareDeliveryId = 1) }
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Lange Nachricht", substring = true)).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithText("Zusammenfassen").performClick()
+        composeRule.waitForIdle()
+
+        // A rotation mid-transcription: the run is cut off and started again for the same batch.
+        restoration.emulateSavedInstanceStateRestore()
+        composeRule.waitForIdle()
+
+        // Checked on the rebuilt screen itself, right away: Robolectric's restoration does not cut
+        // off the old run the way a real rotation does, and that run would start the summary on
+        // its own - so waiting for the summary alone would pass with the request dropped.
+        composeRule.onNodeWithText("sobald das Transkript fertig ist", substring = true).assertExists()
+        composeRule.onAllNodesWithText("Zusammenfassen").assertCountEquals(0)
+
+        composeRule.waitUntil(timeoutMillis = 15_000) {
+            composeRule.onAllNodes(hasText("Vorschlag: Freitag früh", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    @Test
     fun `a streamed summary can be read while it is still coming in`() {
         // The second bullet only after a pause, like tokens still coming from the model.
         // MockWebServer throttles the request too, so the pause is placed by bytes: request and

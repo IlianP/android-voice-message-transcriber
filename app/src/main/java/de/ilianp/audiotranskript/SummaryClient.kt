@@ -126,13 +126,20 @@ object SummaryClient {
 
                 val text = StringBuilder()
                 val source = resp.body?.source() ?: throw WizperException("Keine Zusammenfassung erhalten")
+                // Only a stream that says it is done is complete. One cut off before - a dropped
+                // connection, a proxy closing early - would otherwise pass off its first bullets
+                // as the whole summary, and be stored as such.
+                var finished = false
                 while (true) {
                     val line = source.readUtf8Line() ?: break
                     coroutineContext.ensureActive()
                     // ": OPENROUTER PROCESSING" keep-alives and blank separators carry no data.
                     if (!line.startsWith("data:")) continue
                     val payload = line.removePrefix("data:").trim()
-                    if (payload == "[DONE]") break
+                    if (payload == "[DONE]") {
+                        finished = true
+                        break
+                    }
                     val chunk = runCatching { JSONObject(payload) }.getOrNull() ?: continue
                     // A provider failing mid-answer reports it inside the stream.
                     chunk.optJSONObject("error")?.let { throw WizperException(OpenRouterClient.errorOf(payload, payload)) }
@@ -146,6 +153,7 @@ object SummaryClient {
                     // Leading whitespace would show as an empty card; wait for the first real word.
                     if (text.isNotBlank()) onPartial(text.toString().trimStart())
                 }
+                if (!finished) throw WizperException("Verbindung abgebrochen, Zusammenfassung unvollständig")
                 text.toString().trim().ifBlank { throw WizperException("Keine Zusammenfassung erhalten") }
             }
         } catch (e: IOException) {
