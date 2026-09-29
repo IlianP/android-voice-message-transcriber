@@ -11,7 +11,11 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.performScrollTo
@@ -114,39 +118,82 @@ class ScreenshotTest {
             openRouterApiKey = ""
             groqApiKey = ""
             sonioxApiKey = ""
+            historyLimits = HistoryLimits()
         }
     }
 
     @Test
-    fun `first run shows the settings expanded`() {
+    fun `first run points to the settings`() {
         Settings(context).openRouterApiKey = ""
 
         composeRule.setContent { AppScreen(sharedUris = emptyList()) }
         composeRule.waitForIdle()
 
-        capture("01-erststart-einstellungen-offen")
+        capture("01-erststart-ohne-key")
+        composeRule.onNodeWithText("Noch kein API-Key eingetragen").assertExists()
+
+        composeRule.onNodeWithText("Einstellungen öffnen").performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithText("OpenRouter API-Key").assertExists()
     }
 
     @Test
-    fun `settings fold away once a key is stored`() {
+    fun `with a key stored, the settings take no room on the main screen`() {
         composeRule.setContent { AppScreen(sharedUris = emptyList()) }
         composeRule.waitForIdle()
 
-        capture("02-einstellungen-zugeklappt")
-        composeRule.onNodeWithText("MAI-Transcribe-2 · Deutsch").assertExists()
+        capture("02-hauptbildschirm-kopfzeile")
+        composeRule.onAllNodesWithText("OpenRouter API-Key").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Noch kein API-Key eingetragen").assertCountEquals(0)
+        composeRule.onNodeWithContentDescription("Einstellungen").assertExists()
+        composeRule.onNodeWithContentDescription("Audiodatei auswählen").assertExists()
     }
 
     @Test
-    fun `the folded settings open again on tap`() {
+    fun `the gear opens the settings and back returns with the key saved`() {
         composeRule.setContent { AppScreen(sharedUris = emptyList()) }
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("Einstellungen").performClick()
+        composeRule.onNodeWithContentDescription("Einstellungen").performClick()
         composeRule.waitForIdle()
 
-        capture("03-einstellungen-aufgeklappt")
-        composeRule.onNodeWithText("Einstellungen speichern").assertExists()
+        capture("03-einstellungen")
+        composeRule.onNodeWithText("Einträge behalten").assertExists()
+        composeRule.onNodeWithText("Aufbewahren").assertExists()
+        composeRule.onNodeWithText("7 Tage").assertExists()
+
+        // Saved as typed: there is no save button any more to forget.
+        composeRule.onNodeWithText("Groq API-Key (Fallback, optional)").performTextInput("gsk-neu")
+        composeRule.onNodeWithContentDescription("Zurück").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithContentDescription("Einstellungen").assertExists()
+        assertTrue("Groq-Key nicht gespeichert", Settings(context).groqApiKey == "gsk-neu")
+    }
+
+    @Test
+    fun `tighter history limits warn first and apply on leaving the settings`() {
+        val now = System.currentTimeMillis()
+        val history = TranscriptHistory(context)
+        repeat(7) { i -> history.add("Nachricht $i: $paragraph", payload(i.toByte()), now - i * 60_000L) }
+        registerPlayableAudio(history)
+
+        composeRule.setContent { AppScreen(sharedUris = emptyList()) }
+        awaitHistoryLoaded("Verlauf (7)")
+
+        composeRule.onNodeWithContentDescription("Einstellungen").performClick()
+        composeRule.onNodeWithContentDescription("Einträge behalten: weniger").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Beim Verlassen fallen 2 Einträge", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        capture("03b-einstellungen-verlauf-kuerzen")
+        // Only a warning so far - still all seven.
+        assertTrue(TranscriptHistory(context).entries(now).size == 7)
+
+        composeRule.onNodeWithContentDescription("Zurück").performClick()
+        awaitHistoryLoaded("Verlauf (5)")
+        assertTrue(Settings(context).historyLimits.maxEntries == 5)
     }
 
     @Test
@@ -209,7 +256,56 @@ class ScreenshotTest {
         capture("07-verlauf-liste")
         composeRule.onNodeWithText("gestern").assertExists()
         composeRule.onNodeWithText("vor 3 Tagen").assertExists()
-        composeRule.onNodeWithText("Verlauf löschen").assertExists()
+        // No explanation line under the list any more: the limits live in the settings.
+        composeRule.onAllNodesWithText("Bleibt nur auf diesem Gerät", substring = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun `a long press on a history entry offers to delete it`() {
+        val now = System.currentTimeMillis()
+        val history = TranscriptHistory(context)
+        history.add("Die aktuellste Nachricht: $paragraph", payload(1), now)
+        history.add("Von gestern: $paragraph", payload(2), now - TimeUnit.HOURS.toMillis(30))
+        registerPlayableAudio(history)
+
+        composeRule.setContent { AppScreen(sharedUris = emptyList()) }
+        awaitHistoryLoaded("Verlauf (2)")
+        composeRule.onNodeWithText("Verlauf (2)").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Von gestern", substring = true).performTouchInput { longClick() }
+        composeRule.waitForIdle()
+
+        capture("07b-verlauf-eintrag-loeschen")
+        composeRule.onNodeWithText("Eintrag löschen?").assertExists()
+        composeRule.onNodeWithText("Löschen").performClick()
+        awaitHistoryLoaded("Verlauf (1)")
+
+        composeRule.onAllNodesWithText("Von gestern", substring = true).assertCountEquals(0)
+        val left = TranscriptHistory(context).entries().map { it.transcript.substringBefore(':') }
+        assertTrue("Falscher Eintrag gelöscht: $left", left == listOf("Die aktuellste Nachricht"))
+    }
+
+    @Test
+    fun `deleting the entry on screen clears the screen`() {
+        storeMessage(longTranscript, marker = 1)
+
+        composeRule.setContent { AppScreen(sharedUris = emptyList()) }
+        awaitHistoryLoaded("Verlauf (1)")
+        composeRule.onNodeWithText("Aus dem Verlauf", substring = true).assertExists()
+
+        composeRule.onNodeWithText("Verlauf (1)").performClick()
+        composeRule.waitForIdle()
+        // The entry in the list, not the transcript below it: the list shows two lines only.
+        composeRule.onAllNodesWithText("Donnerstag", substring = true)[0].performTouchInput { longClick() }
+        composeRule.onNodeWithText("Löschen").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Teile eine Sprachnachricht", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+
+        composeRule.onAllNodesWithText("Aus dem Verlauf", substring = true).assertCountEquals(0)
+        composeRule.onAllNodesWithText("Tempo").assertCountEquals(0)
     }
 
     @Test
@@ -261,6 +357,39 @@ class ScreenshotTest {
                 .fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithText("Zweiter Durchlauf", substring = true).assertExists()
+    }
+
+    @Test
+    fun `a share arriving while the settings are open closes them and keeps their changes`() {
+        val uri = Uri.fromFile(audioFile)
+        ShadowMediaPlayer.addMediaInfo(
+            DataSource.toDataSource(context, uri),
+            ShadowMediaPlayer.MediaInfo(225_000, 0),
+        )
+        val delivery = mutableIntStateOf(0)
+        composeRule.setContent {
+            AppScreen(
+                sharedUris = if (delivery.intValue == 0) emptyList() else listOf(uri),
+                shareDeliveryId = delivery.intValue,
+            )
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Einstellungen").performClick()
+        composeRule.onNodeWithContentDescription("Einträge behalten: weniger").performClick()
+        composeRule.waitForIdle()
+
+        // What onNewIntent does when another message is shared into the open app.
+        delivery.intValue = 1
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Donnerstag", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onAllNodesWithText("Einträge behalten").assertCountEquals(0)
+        assertTrue(
+            "Verlaufs-Grenze beim Schließen verloren",
+            Settings(context).historyLimits.maxEntries == 5,
+        )
     }
 
     @Test

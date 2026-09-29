@@ -10,7 +10,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,18 +28,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -55,11 +56,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -174,14 +176,20 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val settings = remember { Settings(context) }
-    val history = remember { TranscriptHistory(context) }
+    // Reads the limits on every access, so ones changed in the settings apply straight away.
+    val history = remember { TranscriptHistory(context) { settings.historyLimits } }
     val queue = remember { PendingQueue(context) }
 
     var openRouterKey by remember { mutableStateOf(settings.openRouterApiKey) }
     var groqKey by remember { mutableStateOf(settings.groqApiKey) }
     var sonioxKey by remember { mutableStateOf(settings.sonioxApiKey) }
     var langCode by remember { mutableStateOf(settings.languageCode) }
-    var savedHint by remember { mutableStateOf(false) }
+    // A screen of its own, swapped in for this one - see [SettingsScreen].
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    // Raised to have the settings close themselves - see the share effect below.
+    var settingsCloseRequest by remember { mutableIntStateOf(0) }
+    // Hoisted, so a trip to the settings does not throw the transcript back to its top.
+    val scrollState = rememberScrollState()
 
     // What is on screen survives the activity being recreated (rotation, dark mode): otherwise
     // the transcript would vanish, and a run cut off by it would never finish.
@@ -221,10 +229,6 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
 
     val hasKey = openRouterKey.isNotBlank() || groqKey.isNotBlank() || sonioxKey.isNotBlank()
 
-    // Keys are entered once, so the settings stay folded away - except on a fresh install, where
-    // there is nothing to transcribe with yet and the user has to get to them.
-    var settingsExpanded by remember { mutableStateOf(!hasKey) }
-
     /** Drops the summary on screen, and one still being made, along with the transcript it was for. */
     fun resetSummary() {
         summaryJob?.cancel()
@@ -232,6 +236,39 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
         summary = null
         summaryError = null
         entryId = null
+    }
+
+    /**
+     * Takes the transcript off the screen once its history entry is gone - deleted, or dropped by
+     * tighter limits. Only the entry [entryId] points at: its stored audio went with it, and a
+     * player left pointing at a deleted file would have nothing to play.
+     */
+    fun dropIfGone(remaining: List<HistoryEntry>) {
+        val shown = entryId ?: return
+        if (remaining.any { it.id == shown }) return
+        job?.cancel()
+        running = false
+        result = null
+        segments = emptyList()
+        error = null
+        activeUris = emptyList()
+        restoredAt = null
+        resetSummary()
+    }
+
+    fun closeSettings(limits: HistoryLimits) {
+        settingsOpen = false
+        // Typed without trimming; the store trims, so read the keys back as they will be used.
+        openRouterKey = settings.openRouterApiKey
+        groqKey = settings.groqApiKey
+        sonioxKey = settings.sonioxApiKey
+        if (limits != settings.historyLimits) {
+            settings.historyLimits = limits
+            scope.launch {
+                entries = withContext(Dispatchers.IO) { history.entries() }
+                dropIfGone(entries)
+            }
+        }
     }
 
     /** Puts a stored transcription back on screen, audio included - no provider involved. */
@@ -347,6 +384,10 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     LaunchedEffect(sharedUris, shareDeliveryId) {
         if (sharedUris.isNotEmpty() && shareDeliveryId != handledDelivery) {
             handledDelivery = shareDeliveryId
+            // A share arriving while the settings are open would otherwise run hidden behind
+            // them. Asked rather than dropped, so the screen applies its history limits the same
+            // way Back does instead of losing them.
+            if (settingsOpen) settingsCloseRequest++
             takeOver(sharedUris, withQueue = false)
         }
     }
@@ -405,6 +446,30 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
         }
     }
 
+    if (settingsOpen) {
+        SettingsScreen(
+            history = history,
+            openRouterKey = openRouterKey,
+            onOpenRouterKeyChange = { openRouterKey = it; settings.openRouterApiKey = it },
+            groqKey = groqKey,
+            onGroqKeyChange = { groqKey = it; settings.groqApiKey = it },
+            sonioxKey = sonioxKey,
+            onSonioxKeyChange = { sonioxKey = it; settings.sonioxApiKey = it },
+            langCode = langCode,
+            onLangSelect = { langCode = it; settings.languageCode = it },
+            limits = settings.historyLimits,
+            onClearHistory = {
+                history.clear()
+                entries = emptyList()
+                historyExpanded = false
+                dropIfGone(entries)
+            },
+            closeRequest = settingsCloseRequest,
+            onClose = { closeSettings(it) },
+        )
+        return
+    }
+
     Scaffold(
         bottomBar = {
             // Pinned to the bottom: the message stays playable however far the transcript below
@@ -416,299 +481,104 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .verticalScroll(scrollState)
+                .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Audio-Transkript", style = MaterialTheme.typography.headlineSmall)
-
-            SettingsSection(
-                expanded = settingsExpanded,
-                onToggle = { settingsExpanded = !settingsExpanded; savedHint = false },
-                summary = settingsSummary(openRouterKey, groqKey, sonioxKey, langCode),
-                openRouterKey = openRouterKey,
-                onOpenRouterKeyChange = { openRouterKey = it; savedHint = false },
-                groqKey = groqKey,
-                onGroqKeyChange = { groqKey = it; savedHint = false },
-                sonioxKey = sonioxKey,
-                onSonioxKeyChange = { sonioxKey = it; savedHint = false },
-                langCode = langCode,
-                onLangSelect = { langCode = it; savedHint = false },
-                savedHint = savedHint,
-                onSave = {
-                    settings.openRouterApiKey = openRouterKey
-                    settings.groqApiKey = groqKey
-                    settings.sonioxApiKey = sonioxKey
-                    settings.languageCode = langCode
-                    openRouterKey = settings.openRouterApiKey
-                    groqKey = settings.groqApiKey
-                    sonioxKey = settings.sonioxApiKey
-                    savedHint = true
-                    // Saved settings have served their purpose - give the screen back to the transcript.
-                    settingsExpanded = false
+            // One line for everything that is not the message itself: history, file, settings.
+            HeaderWithHistory(
+                entries = entries,
+                expanded = historyExpanded,
+                onToggle = { historyExpanded = !historyExpanded },
+                onSelect = { entry ->
+                    showFromHistory(entry)
+                    historyExpanded = false
                 },
+                onDelete = { entry ->
+                    scope.launch {
+                        entries = withContext(Dispatchers.IO) { history.delete(entry.id) }
+                        if (entries.isEmpty()) historyExpanded = false
+                        dropIfGone(entries)
+                    }
+                },
+                onPickFile = { picker.launch(arrayOf("audio/*")) },
+                onOpenSettings = { settingsOpen = true },
             )
 
-            if (entries.isNotEmpty()) {
-                HistorySection(
-                    entries = entries,
-                    expanded = historyExpanded,
-                    onToggle = { historyExpanded = !historyExpanded },
-                    onSelect = { entry ->
-                        showFromHistory(entry)
-                        historyExpanded = false
-                    },
-                    onClear = {
-                        history.clear()
-                        entries = emptyList()
-                        historyExpanded = false
-                        // The stored audio goes with it, so a transcript that came from there
-                        // cannot stay on screen with a player pointing at a deleted file.
-                        if (restoredAt != null) {
-                            result = null
-                            segments = emptyList()
-                            activeUris = emptyList()
-                            restoredAt = null
-                            resetSummary()
-                        }
-                    },
-                )
-            }
-
-            if (pendingCount > 0) {
-                PendingSection(
-                    count = pendingCount,
-                    onStart = { takeOver(emptyList(), withQueue = true) },
-                    onDiscard = {
-                        queue.clear()
-                        pendingCount = 0
-                    },
-                )
-            }
-
-            OutlinedButton(
-                onClick = { picker.launch(arrayOf("audio/*")) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Audiodatei auswählen")
-            }
-
-            val uris = activeUris
-            // Also shown without audio: an entry whose copy could not be written, or whose
-            // file is gone, still has its text - and that is the part worth reading.
-            if (uris.isNotEmpty() || result != null) {
-                Spacer(Modifier.height(8.dp))
-                // Above the transcript: whoever wants the summary wants to read it first.
-                if (result != null && !running && error == null && openRouterKey.isNotBlank()) {
-                    SummarySection(
-                        summary = summary,
-                        summarizing = summarizing,
-                        error = summaryError,
-                        totalDurationMs = player?.durationMs ?: 0,
-                        messageCount = segments.size,
-                        onSummarize = { startSummary() },
-                        onCancel = { summaryJob?.cancel(); summarizing = false },
-                        onCopy = { summary?.let { clipboard.setText(AnnotatedString(it)) } },
-                        onShare = { summary?.let { shareText(context, it, "Zusammenfassung teilen") } },
-                    )
-                }
-                TranscriptionPanel(
-                    running = running,
-                    result = result,
-                    segments = segments,
-                    doneCount = doneCount,
-                    totalCount = uris.size,
-                    playingSegment = player?.takeIf { it.isPlaying }?.currentIndex,
-                    onPlaySegment = { player?.playSegment(it) },
-                    error = error,
-                    hasKey = hasKey,
-                    elapsedSeconds = elapsedSeconds,
-                    restoredAt = restoredAt,
-                    hasAudio = uris.isNotEmpty(),
-                    onStart = { startTranscription(uris) },
-                    onCancel = { job?.cancel(); running = false },
-                    onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
-                    onShare = { result?.let { shareText(context, it) } },
-                )
-            } else {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit „Audio-Transkript“ → „Transkript starten“ – oder wähle oben eine Datei aus – um sie zu transkribieren. " +
-                        "Mehrere Nachrichten am Stück: alle bis auf die letzte mit „Zwischenspeichern“ teilen, die letzte mit „Transkript starten“.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-
-            if (BuildConfig.DEBUG) {
-                Spacer(Modifier.height(8.dp))
-                DebugPanel(
-                    log = debugLog,
-                    onCopy = { clipboard.setText(AnnotatedString(debugLog)) },
-                    onClear = { DebugLog.clear(context); debugLog = "" },
-                )
-            }
-        }
-    }
-}
-
-/**
- * API keys and the language choice, folded behind a flat header.
- *
- * These are entered once and then barely touched, so they should not take up the top of the
- * screen on every run - the transcript and the player are what the app is actually for.
- */
-@Composable
-private fun SettingsSection(
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    summary: String,
-    openRouterKey: String,
-    onOpenRouterKeyChange: (String) -> Unit,
-    groqKey: String,
-    onGroqKeyChange: (String) -> Unit,
-    sonioxKey: String,
-    onSonioxKeyChange: (String) -> Unit,
-    langCode: String,
-    onLangSelect: (String) -> Unit,
-    savedHint: Boolean,
-    onSave: () -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggle)
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Einstellungen", style = MaterialTheme.typography.titleSmall)
-                if (!expanded) {
-                    Text(
-                        summary,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Icon(
-                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription = if (expanded) {
-                    "Einstellungen zuklappen"
-                } else {
-                    "Einstellungen aufklappen"
-                },
-            )
-        }
-
-        AnimatedVisibility(visible = expanded) {
+            // The rest of the column keeps its old right margin; only the header's icons move
+            // out to the edge, so their touch targets do not eat into the row.
             Column(
-                modifier = Modifier.padding(bottom = 12.dp),
+                modifier = Modifier.padding(end = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                OutlinedTextField(
-                    value = openRouterKey,
-                    onValueChange = onOpenRouterKeyChange,
-                    label = { Text("OpenRouter API-Key") },
-                    supportingText = {
-                        Text("Primäres Modell: MAI-Transcribe-2 von Microsoft, rund 0,10 $ pro Stunde Audio.")
-                    },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                OutlinedTextField(
-                    value = groqKey,
-                    onValueChange = onGroqKeyChange,
-                    label = { Text("Groq API-Key (Fallback, optional)") },
-                    supportingText = {
-                        Text("Greift nur, wenn MAI-Transcribe-2 fehlschlägt.")
-                    },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                OutlinedTextField(
-                    value = sonioxKey,
-                    onValueChange = onSonioxKeyChange,
-                    label = { Text("Soniox API-Key (letzter Fallback, optional)") },
-                    supportingText = {
-                        Text("Greift nur, wenn auch Groq fehlschlägt. Audio wird kurz hochgeladen und direkt nach der Transkription wieder gelöscht.")
-                    },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                LanguageDropdown(selectedCode = langCode, onSelect = onLangSelect)
-
-                Button(onClick = onSave, modifier = Modifier.fillMaxWidth()) {
-                    Text("Einstellungen speichern")
+                if (!hasKey) {
+                    MissingKeyCard(onOpenSettings = { settingsOpen = true })
                 }
-            }
-        }
 
-        // Sits outside the fold: saving collapses the section, and the confirmation still needs
-        // somewhere to show up.
-        if (savedHint) {
-            Text(
-                "Gespeichert.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-        }
+                if (pendingCount > 0) {
+                    PendingSection(
+                        count = pendingCount,
+                        onStart = { takeOver(emptyList(), withQueue = true) },
+                        onDiscard = {
+                            queue.clear()
+                            pendingCount = 0
+                        },
+                    )
+                }
 
-        HorizontalDivider()
-    }
-}
+                val uris = activeUris
+                // Also shown without audio: an entry whose copy could not be written, or whose
+                // file is gone, still has its text - and that is the part worth reading.
+                if (uris.isNotEmpty() || result != null) {
+                    // Above the transcript: whoever wants the summary wants to read it first.
+                    if (result != null && !running && error == null && openRouterKey.isNotBlank()) {
+                        SummarySection(
+                            summary = summary,
+                            summarizing = summarizing,
+                            error = summaryError,
+                            totalDurationMs = player?.durationMs ?: 0,
+                            messageCount = segments.size,
+                            onSummarize = { startSummary() },
+                            onCancel = { summaryJob?.cancel(); summarizing = false },
+                            onCopy = { summary?.let { clipboard.setText(AnnotatedString(it)) } },
+                            onShare = { summary?.let { shareText(context, it, "Zusammenfassung teilen") } },
+                        )
+                    }
+                    TranscriptionPanel(
+                        running = running,
+                        result = result,
+                        segments = segments,
+                        doneCount = doneCount,
+                        totalCount = uris.size,
+                        playingSegment = player?.takeIf { it.isPlaying }?.currentIndex,
+                        onPlaySegment = { player?.playSegment(it) },
+                        error = error,
+                        hasKey = hasKey,
+                        elapsedSeconds = elapsedSeconds,
+                        restoredAt = restoredAt,
+                        hasAudio = uris.isNotEmpty(),
+                        onStart = { startTranscription(uris) },
+                        onCancel = { job?.cancel(); running = false },
+                        onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
+                        onShare = { result?.let { shareText(context, it) } },
+                    )
+                } else {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Teile eine Sprachnachricht oder Audio-Datei aus einer anderen App (z. B. WhatsApp) mit „Audio-Transkript“ → „Transkript starten“ – oder wähle über das Ordner-Symbol oben eine Datei aus – um sie zu transkribieren. " +
+                            "Mehrere Nachrichten am Stück: alle bis auf die letzte mit „Zwischenspeichern“ teilen, die letzte mit „Transkript starten“.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
 
-/** One line describing the folded settings: which provider runs, and in which language. */
-private fun settingsSummary(
-    openRouterKey: String,
-    groqKey: String,
-    sonioxKey: String,
-    langCode: String,
-): String {
-    val provider = when {
-        openRouterKey.isNotBlank() -> "MAI-Transcribe-2"
-        groqKey.isNotBlank() -> "Groq Whisper"
-        sonioxKey.isNotBlank() -> "Soniox"
-        else -> return "Kein API-Key gesetzt"
-    }
-    return "$provider · ${languageLabelFor(langCode)}"
-}
-
-private fun languageLabelFor(code: String): String =
-    LANGUAGE_OPTIONS.firstOrNull { it.code == code }?.label ?: LANGUAGE_OPTIONS.first().label
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LanguageDropdown(selectedCode: String, onSelect: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedLabel = languageLabelFor(selectedCode)
-
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        OutlinedTextField(
-            value = selectedLabel,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Sprache") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier
-                .menuAnchor()
-                .fillMaxWidth(),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            LANGUAGE_OPTIONS.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.label) },
-                    onClick = {
-                        onSelect(option.code)
-                        expanded = false
-                    },
-                )
+                if (BuildConfig.DEBUG) {
+                    Spacer(Modifier.height(8.dp))
+                    DebugPanel(
+                        log = debugLog,
+                        onCopy = { clipboard.setText(AnnotatedString(debugLog)) },
+                        onClear = { DebugLog.clear(context); debugLog = "" },
+                    )
+                }
             }
         }
     }
@@ -797,7 +667,7 @@ private fun TranscriptionPanel(
 
                 else -> {
                     if (!hasKey) {
-                        Text("Bitte zuerst oben unter \"Einstellungen\" einen API-Key eintragen und speichern.")
+                        Text("Bitte zuerst in den Einstellungen (Zahnrad oben rechts) einen API-Key eintragen.")
                     }
                     Button(onClick = onStart, enabled = hasKey && hasAudio) { Text("Transkribieren") }
                 }
@@ -985,57 +855,106 @@ private fun PendingSection(count: Int, onStart: () -> Unit, onDiscard: () -> Uni
     }
 }
 
+/** Shown instead of a silent „Transkribieren“ button that could never work: nothing to send with. */
+@Composable
+private fun MissingKeyCard(onOpenSettings: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Noch kein API-Key eingetragen", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Ohne Key kann nichts transkribiert werden. Die Keys stehen in den Einstellungen.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onOpenSettings) { Text("Einstellungen öffnen") }
+        }
+    }
+}
+
 /**
- * The last few transcriptions, folded away behind a one-line header.
+ * The screen's only header: the history, folded away behind one line, with the file picker and
+ * the settings as icons beside it. Everything else on the screen belongs to the message.
  *
  * Tapping an entry puts it back on screen with its audio, straight from local storage - no
- * second trip through a transcription API, and no cost.
+ * second trip through a transcription API, and no cost. A long press offers to delete it.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HistorySection(
+private fun HeaderWithHistory(
     entries: List<HistoryEntry>,
     expanded: Boolean,
     onToggle: () -> Unit,
     onSelect: (HistoryEntry) -> Unit,
-    onClear: () -> Unit,
+    onDelete: (HistoryEntry) -> Unit,
+    onPickFile: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
+    var pendingDelete by remember { mutableStateOf<HistoryEntry?>(null) }
+    val haptics = LocalHapticFeedback.current
+
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggle)
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Verlauf (${entries.size})", style = MaterialTheme.typography.titleSmall)
-                if (!expanded) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (entries.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClick = onToggle)
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Verlauf (${entries.size})", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "Zuletzt: ${relativeTime(entries.first().createdAt)}",
+                        " · ${relativeTime(entries.first().createdAt)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Icon(
+                        imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = if (expanded) "Verlauf zuklappen" else "Verlauf aufklappen",
                     )
                 }
+            } else {
+                Text(
+                    "Audio-Transkript",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
             }
-            Icon(
-                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription = if (expanded) "Verlauf zuklappen" else "Verlauf aufklappen",
-            )
+            IconButton(onClick = onPickFile) {
+                Icon(Icons.Outlined.FolderOpen, contentDescription = "Audiodatei auswählen")
+            }
+            IconButton(onClick = onOpenSettings) {
+                Icon(Icons.Outlined.Settings, contentDescription = "Einstellungen")
+            }
         }
 
-        AnimatedVisibility(visible = expanded) {
-            Column(modifier = Modifier.padding(bottom = 12.dp)) {
+        AnimatedVisibility(visible = expanded && entries.isNotEmpty()) {
+            Column(modifier = Modifier.padding(end = 12.dp, bottom = 4.dp)) {
                 entries.forEach { entry ->
                     HorizontalDivider()
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onSelect(entry) }
+                            .combinedClickable(
+                                onClick = { onSelect(entry) },
+                                onLongClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    pendingDelete = entry
+                                },
+                                onLongClickLabel = "Eintrag löschen",
+                            )
                             .padding(vertical = 10.dp),
                     ) {
-                        val size = entry.segments.size
                         Text(
-                            relativeTime(entry.createdAt) + if (size > 1) " · $size Nachrichten" else "",
+                            entryLabel(entry),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1047,23 +966,46 @@ private fun HistorySection(
                         )
                     }
                 }
-                HorizontalDivider()
-
-                Text(
-                    "Bleibt nur auf diesem Gerät: die letzten ${TranscriptHistory.MAX_ENTRIES} " +
-                        "Nachrichten, höchstens sieben Tage lang.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-                OutlinedButton(onClick = onClear, modifier = Modifier.padding(top = 8.dp)) {
-                    Text("Verlauf löschen")
-                }
             }
         }
 
-        HorizontalDivider()
+        HorizontalDivider(modifier = Modifier.padding(end = 12.dp))
     }
+
+    pendingDelete?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Eintrag löschen?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        entryLabel(entry),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(entry.transcript, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        "Text und Audio werden von diesem Gerät gelöscht.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    onDelete(entry)
+                }) { Text("Löschen") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Abbrechen") }
+            },
+        )
+    }
+}
+
+private fun entryLabel(entry: HistoryEntry): String {
+    val size = entry.segments.size
+    return relativeTime(entry.createdAt) + if (size > 1) " · $size Nachrichten" else ""
 }
 
 /** Ages in German, independent of the device locale - the rest of the app speaks it too. */
