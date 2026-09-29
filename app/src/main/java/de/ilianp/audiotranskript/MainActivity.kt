@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -226,6 +227,12 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     var summaryError by rememberSaveable { mutableStateOf<String?>(null) }
     var summarizing by remember { mutableStateOf(false) }
     var summaryJob by remember { mutableStateOf<Job?>(null) }
+    // The summary so far while it streams in, so its first bullet can be read before the last
+    // one is written. Not saved: a recreated screen has lost the stream it came from.
+    var summaryDraft by remember { mutableStateOf<String?>(null) }
+    // Tapped while the transcript was still being made: the summary starts the moment it is done,
+    // instead of making the user wait for the transcript and then tap again.
+    var summaryRequested by rememberSaveable { mutableStateOf(false) }
 
     val hasKey = openRouterKey.isNotBlank() || groqKey.isNotBlank() || sonioxKey.isNotBlank()
 
@@ -234,7 +241,9 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
         summaryJob?.cancel()
         summarizing = false
         summary = null
+        summaryDraft = null
         summaryError = null
+        summaryRequested = false
         entryId = null
     }
 
@@ -290,10 +299,14 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
         if (summarizing || texts.isEmpty() || openRouterKey.isBlank()) return
         summarizing = true
         summaryError = null
+        summaryDraft = null
         val forEntry = entryId
         summaryJob = scope.launch {
             try {
-                val text = SummaryClient.summarize(texts, openRouterKey)
+                val text = SummaryClient.summarize(texts, openRouterKey) { partial ->
+                    // Arrives off the main thread; snapshot state may be written from any thread.
+                    summaryDraft = partial
+                }
                 summary = text
                 if (forEntry != null) {
                     entries = withContext(Dispatchers.IO) { history.setSummary(forEntry, text) }
@@ -304,7 +317,10 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                 summaryError = e.message ?: "Unbekannter Fehler"
             } finally {
                 // Same as for the transcription: a cancelled run leaves the flag to its successor.
-                if (isActive) summarizing = false
+                if (isActive) {
+                    summarizing = false
+                    summaryDraft = null
+                }
             }
         }
     }
@@ -340,10 +356,16 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                 entries = withContext(Dispatchers.IO) { history.add(texts, payloads) }
                 // The entry just written is the newest one.
                 entryId = entries.firstOrNull()?.id
+                if (summaryRequested) {
+                    summaryRequested = false
+                    startSummary()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 error = e.message ?: "Unbekannter Fehler"
+                // Nothing to summarize; the request would otherwise fire on the next message.
+                summaryRequested = false
             } finally {
                 // Only a run that finished on its own owns this flag. A cancelled one lands
                 // here too, but by then a newer message may already be running, and clearing
@@ -531,15 +553,25 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                 // file is gone, still has its text - and that is the part worth reading.
                 if (uris.isNotEmpty() || result != null) {
                     // Above the transcript: whoever wants the summary wants to read it first.
-                    if (result != null && !running && error == null && openRouterKey.isNotBlank()) {
+                    // Offered already while the transcript is being made: the length is known from
+                    // the audio, and the seconds spent deciding overlap with the transcription.
+                    if ((running || result != null) && error == null && openRouterKey.isNotBlank()) {
                         SummarySection(
                             summary = summary,
+                            draft = summaryDraft,
                             summarizing = summarizing,
+                            requested = summaryRequested,
+                            transcribing = running,
                             error = summaryError,
                             totalDurationMs = player?.durationMs ?: 0,
-                            messageCount = segments.size,
-                            onSummarize = { startSummary() },
-                            onCancel = { summaryJob?.cancel(); summarizing = false },
+                            messageCount = if (running) uris.size else segments.size,
+                            onSummarize = { if (running) summaryRequested = true else startSummary() },
+                            onCancel = {
+                                summaryJob?.cancel()
+                                summarizing = false
+                                summaryDraft = null
+                                summaryRequested = false
+                            },
                             onCopy = { summary?.let { clipboard.setText(AnnotatedString(it)) } },
                             onShare = { summary?.let { shareText(context, it, "Zusammenfassung teilen") } },
                         )
@@ -683,11 +715,18 @@ private fun TranscriptionPanel(
  * offer is a card of its own; below that it is a plain text button, there if wanted but not in
  * the way. Nothing is summarized without a tap: it sends the transcript to one more provider.
  * [totalDurationMs] is 0 while the player is still preparing, or when there is no audio left.
+ *
+ * While [transcribing], only the card is offered (a short message is done before anyone would
+ * reach for the quiet button), and a tap on it becomes [requested]: the summary then starts by
+ * itself once the transcript is there. [draft] is the summary so far while it streams in.
  */
 @Composable
 private fun SummarySection(
     summary: String?,
+    draft: String?,
     summarizing: Boolean,
+    requested: Boolean,
+    transcribing: Boolean,
     error: String?,
     totalDurationMs: Int,
     messageCount: Int,
@@ -737,7 +776,31 @@ private fun SummarySection(
             }
         }
 
-        summarizing -> Card(modifier = Modifier.fillMaxWidth()) {
+        // Streaming in: the bullets written so far, readable already, with a way out.
+        summarizing && !draft.isNullOrBlank() -> Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Zusammenfassung",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+                Text(draft)
+                OutlinedButton(onClick = onCancel) { Text("Abbrechen") }
+            }
+        }
+
+        summarizing || requested -> Card(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -746,7 +809,10 @@ private fun SummarySection(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CircularProgressIndicator()
-                Text("Wird zusammengefasst …", modifier = Modifier.weight(1f))
+                Text(
+                    if (summarizing) "Wird zusammengefasst …" else "Wird zusammengefasst, sobald das Transkript fertig ist …",
+                    modifier = Modifier.weight(1f),
+                )
                 OutlinedButton(onClick = onCancel) { Text("Abbrechen") }
             }
         }
@@ -789,7 +855,9 @@ private fun SummarySection(
             }
         }
 
-        else -> TextButton(onClick = onSummarize) { Text("Zusammenfassung erstellen") }
+        !transcribing -> TextButton(onClick = onSummarize) { Text("Zusammenfassung erstellen") }
+
+        else -> Unit
     }
 }
 

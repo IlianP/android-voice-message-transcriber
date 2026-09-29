@@ -14,6 +14,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performClick
@@ -510,17 +512,8 @@ class ScreenshotTest {
     @Test
     fun `a summary shows above the transcript and is kept in the history`() {
         val summary = "• Termin am Donnerstag fällt aus\n• Vorschlag: Freitag früh\n• Unterlagen kamen per Mail"
-        server.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .setHeader("Content-Type", "application/json")
-                .setBody(
-                    JSONObject().put(
-                        "choices",
-                        JSONArray().put(JSONObject().put("message", JSONObject().put("content", summary))),
-                    ).toString(),
-                ),
-        )
+        // Streamed, the way OpenRouter answers the app's request.
+        server.enqueue(streamed(summary.split("\n").mapIndexed { i, l -> if (i == 0) l else "\n$l" }))
         showTranscribedMessage()
 
         composeRule.onNodeWithText("Zusammenfassen").performClick()
@@ -540,6 +533,79 @@ class ScreenshotTest {
 
         val stored = TranscriptHistory(context).entries().single()
         assertTrue("Zusammenfassung nicht im Verlauf: ${stored.summary}", stored.summary == summary)
+    }
+
+    @Test
+    fun `a summary tapped during the transcription starts once the transcript is there`() {
+        val uri = Uri.fromFile(audioFile)
+        ShadowMediaPlayer.addMediaInfo(
+            DataSource.toDataSource(context, uri),
+            ShadowMediaPlayer.MediaInfo(225_000, 0),
+        )
+        val summary = "• Termin am Donnerstag fällt aus\n• Vorschlag: Freitag früh"
+        val order = java.util.Collections.synchronizedList(mutableListOf<String>())
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                order += request.path.orEmpty()
+                return if (request.path.orEmpty().endsWith("/chat/completions")) {
+                    streamed(listOf(summary))
+                } else {
+                    // Slow enough to tap the offer while it is still running.
+                    MockResponse()
+                        .setHeader("Content-Type", "application/json")
+                        .setBody(JSONObject().put("text", longTranscript).toString())
+                        .setBodyDelay(2, TimeUnit.SECONDS)
+                }
+            }
+        }
+
+        composeRule.setContent { AppScreen(sharedUris = listOf(uri)) }
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Lange Nachricht", substring = true)).fetchSemanticsNodes().isNotEmpty()
+        }
+        // Still transcribing: the offer is there before the transcript is.
+        composeRule.onNodeWithText("Wird transkribiert", substring = true).assertExists()
+        composeRule.onNodeWithText("Zusammenfassen").performClick()
+        composeRule.waitForIdle()
+
+        capture("10b-zusammenfassung-vorgemerkt")
+        composeRule.onNodeWithText("sobald das Transkript fertig ist", substring = true).assertExists()
+
+        composeRule.waitUntil(timeoutMillis = 15_000) {
+            composeRule.onAllNodes(hasText("Vorschlag: Freitag früh", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        assertTrue(
+            "Zusammenfassung nicht nach der Transkription angefragt: $order",
+            order.size == 2 && order[0].endsWith("/audio/transcriptions") && order[1].endsWith("/chat/completions"),
+        )
+    }
+
+    @Test
+    fun `a streamed summary can be read while it is still coming in`() {
+        // The second bullet only after a pause, like tokens still coming from the model.
+        // MockWebServer throttles the request too, so the pause is placed by bytes: request and
+        // first bullet fit into the first 4 KB, a keep-alive pad fills the rest.
+        server.enqueue(
+            streamed(listOf("• Termin am Donnerstag fällt aus", "\n• Vorschlag: Freitag früh"), padAfterFirst = 4096)
+                .throttleBody(4096, 3, TimeUnit.SECONDS),
+        )
+        showTranscribedMessage()
+
+        composeRule.onNodeWithText("Zusammenfassen").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Termin am Donnerstag fällt aus", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+
+        capture("11b-zusammenfassung-kommt-herein")
+        // The first bullet is up while the second is still on its way.
+        composeRule.onAllNodesWithText("Vorschlag: Freitag früh", substring = true).assertCountEquals(0)
+
+        composeRule.waitUntil(timeoutMillis = 15_000) {
+            composeRule.onAllNodes(hasText("Vorschlag: Freitag früh", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     @Test
@@ -587,6 +653,27 @@ class ScreenshotTest {
         return first
     }
 
+    /**
+     * An OpenRouter stream answering the summary request, one chunk per piece. [padAfterFirst]
+     * adds a keep-alive comment of that many bytes after the first piece - see its one caller.
+     */
+    private fun streamed(pieces: List<String>, padAfterFirst: Int = 0): MockResponse {
+        val body = StringBuilder(": OPENROUTER PROCESSING\n\n")
+        pieces.forEachIndexed { index, piece ->
+            val chunk = JSONObject().put(
+                "choices",
+                JSONArray().put(JSONObject().put("delta", JSONObject().put("content", piece))),
+            )
+            body.append("data: ").append(chunk).append("\n\n")
+            if (index == 0 && padAfterFirst > 0) body.append(": ").append("x".repeat(padAfterFirst)).append("\n\n")
+        }
+        body.append("data: [DONE]\n\n")
+        return MockResponse()
+            .setResponseCode(200)
+            .setHeader("Content-Type", "text/event-stream")
+            .setBody(body.toString())
+    }
+
     private fun payload(marker: Byte) =
         AudioPayload(ByteArray(64) { marker }, "audio.ogg", "audio/ogg")
 
@@ -615,8 +702,20 @@ class ScreenshotTest {
      * wait for - so a screen restored from it has to be waited for by its content.
      */
     private fun awaitHistoryLoaded(text: String) {
-        composeRule.waitUntil(timeoutMillis = 10_000) {
-            composeRule.onAllNodes(hasText(text, substring = true)).fetchSemanticsNodes().isNotEmpty()
+        runCatching {
+            composeRule.waitUntil(timeoutMillis = 10_000) {
+                composeRule.onAllNodes(hasText(text, substring = true)).fetchSemanticsNodes().isNotEmpty()
+            }
+        }.onFailure {
+            // This wait has failed sporadically in full runs and never reproduced on its own -
+            // so a failure says what the history held and what was on screen, to find out why.
+            throw AssertionError(
+                "„$text“ nicht erschienen. Verlauf: " +
+                    TranscriptHistory(context).entries().map { e -> e.transcript.take(40) } +
+                    ", Grenzen: ${Settings(context).historyLimits}, Bildschirm:\n" +
+                    composeRule.onRoot().printToString(),
+                it,
+            )
         }
         composeRule.waitForIdle()
     }

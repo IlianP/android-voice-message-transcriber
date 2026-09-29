@@ -100,7 +100,19 @@ GLM 5.3 Flash – man wartet ja am Bildschirm darauf.
   Stapel insgesamt) erscheint über dem Transkript eine Karte „Lange Nachricht · 4:32 –
   Zusammenfassen"; darunter nur ein Textknopf. Die Dauer kommt vom Player, der sie für die
   durchgehende Zeitleiste ohnehin ermittelt.
-- **3–6 Stichpunkte in der Sprache des Transkripts.** Ein Stapel geht mit nummerierten
+- **Schon während der Transkription angeboten.** Die Karte steht da, sobald die Länge bekannt
+  ist. Ein Tipp merkt die Zusammenfassung vor („Wird zusammengefasst, sobald das Transkript
+  fertig ist …"); sie startet dann von selbst, sobald der Text da ist.
+- **Gestreamt und ohne Reasoning.** Der erste Stichpunkt erscheint nach typisch 0,3–0,5 s, die
+  übrigen bauen sich beim Lesen auf. Grundlage ist eine Messung
+  (`.github/scripts/summary_latency.py`, Workflow „Zusammenfassung – Latenz- und
+  Qualitätsvergleich"): Mit Reasoning dachte das Modell 300–1.700 Tokens lang nach, bevor das
+  erste Wort kam – meist 3–6 s, einmal 22 s –, bei dreifachen Kosten und ohne bessere
+  Zusammenfassung. Streaming kostet dasselbe wie eine Antwort am Stück.
+- **Routing „günstig, aber schnell":** nach Preis sortiert, aber Anbieter bevorzugt, die im
+  Median binnen 1,5 s anfangen und ≥ 80 Tokens/s liefern (`preferred_max_latency` /
+  `preferred_min_throughput`). In der Messung so teuer wie reines Sortieren nach Tempo.
+- **3–7 Stichpunkte in der Sprache des Transkripts.** Ein Stapel geht mit nummerierten
   Nachrichten hinein. Das Transkript wird als Inhalt übergeben, nicht als Anweisung.
 - **Datenschutz-Routing:** der Request verlangt `data_collection: deny` und `zdr: true` –
   OpenRouter leitet nur an Anbieter weiter, die weder trainieren noch speichern.
