@@ -89,8 +89,13 @@ Robolectric leitet Befehle eines `MediaControllerCompat` nicht an die Session we
 `deepseek/deepseek-v4.1-flash` zusammen – gewählt über die Benchmark-Heaven-API
 (`https://benchmarkheaven.com/api/dataset`, Doku im GitHub-Repo `fstandhartinger/model-market-comparison`,
 `API.md`), falls das Modell mal neu bewertet werden soll. Nur auf Tipp, nie automatisch; ab
-`SUGGEST_FROM_MS` (2 min, Dauer vom `MessagePlayerController`) wird sie als Karte angeboten. Der
-Request erzwingt `data_collection: deny` + `zdr: true`. Das Ergebnis landet per
+`SUGGEST_FROM_MS` (2 min, Dauer vom `MessagePlayerController`) wird sie als Karte angeboten – schon
+während der Transkription; ein Tipp dort setzt `summaryRequested`, und `startTranscription` startet
+die Zusammenfassung nach Erfolg selbst. Der Request erzwingt `data_collection: deny` + `zdr: true`,
+schaltet Reasoning ab und streamt (SSE; `onPartial` füllt `summaryDraft`, JSON-Antworten – Fehler,
+oder ein Anbieter ohne Streaming – werden am Stück gelesen). Warum so: Messung mit
+`.github/scripts/summary_latency.py` (Workflow „Zusammenfassung – Latenz- und Qualitätsvergleich",
+nur von Hand), vor Änderungen an Modell/Routing/Reasoning erneut laufen lassen. Das Ergebnis landet per
 `TranscriptHistory.setSummary` im Verlaufseintrag; `add()` für dieselbe Nachricht verwirft es.
 
 ## Build & Test
