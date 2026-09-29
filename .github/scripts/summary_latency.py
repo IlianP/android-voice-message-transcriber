@@ -6,8 +6,13 @@ Vergleicht den Request, den SummaryClient.kt heute schickt, mit Varianten ohne R
 anderem Routing und mit anderen guenstigen Modellen - an Beispieltexten verschiedener Laenge. Pro
 Anfrage wird gemessen:
 
-  * TTFT      - Zeit bis zum ersten sichtbaren Zeichen (so frueh koennte eine streamende App zeigen)
-  * Gesamt    - Zeit bis die Antwort komplett ist (so lange wartet die App heute)
+  * TTFT      - Zeit bis zum ersten sichtbaren Zeichen = so frueh zeigt eine App MIT Streaming
+                den ersten Stichpunkt an
+  * Gesamt    - Zeit bis die Antwort komplett ist = so lange wartet eine App OHNE Streaming,
+                also die App heute, bevor sie ueberhaupt etwas anzeigt
+
+Gemessen wird immer gestreamt; die Antwort ohne Streaming ist dieselbe, nur am Stueck geliefert.
+Die Differenz beider Zeiten ist also genau das, was Streaming an Wartezeit spart.
   * Kosten    - was OpenRouter fuer die Anfrage berechnet (usage.cost)
   * Fakten    - wie viele der vorher festgelegten Kernaussagen des Textes in der Zusammenfassung
                 stehen (Schluesselwort-Pruefung, grob, aber fuer alle Varianten gleich)
@@ -245,9 +250,11 @@ def measure(key, body, timeout=120):
                 usage = chunk.get("usage") or usage
                 for choice in chunk.get("choices") or []:
                     c = (choice.get("delta") or {}).get("content") or ""
-                    if c and first_content is None:
-                        first_content = time.perf_counter() - t0
                     content.append(c)
+                    # Erst ein sichtbares Zeichen zaehlt: manche Anbieter schicken vorweg ein
+                    # Leerzeichen oder einen Zeilenumbruch, und das saehe man auf dem Bildschirm nicht.
+                    if first_content is None and c.strip():
+                        first_content = time.perf_counter() - t0
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:200]}"}
     except Exception as e:  # Netzwerk, Timeout, kaputtes JSON
@@ -318,7 +325,10 @@ def main():
 
     ok = lambda vid, sample: [r for r in results.get((vid, sample), []) if "error" not in r]
 
-    print("\n## Geschwindigkeit (Median: bis zum ersten Zeichen / bis komplett)\n")
+    print("\n## Geschwindigkeit (Median)\n")
+    print("Je Zelle: **mit Streaming** sichtbar ab / **ohne Streaming** (App heute) sichtbar ab. "
+          "Mit Streaming erscheint der erste Stichpunkt nach der ersten Zeit und der Rest baut "
+          "sich beim Lesen auf; ohne Streaming ist bis zur zweiten Zeit nichts zu sehen.\n")
     print("| Variante | " + " | ".join(n for n, _, _ in SAMPLES) + " |")
     print("|---|" + "---:|" * len(SAMPLES))
     for vid, label, *_ in variants:
@@ -328,6 +338,18 @@ def main():
             cells.append(f"{s(median([r['ttft'] for r in rs]))} / {s(median([r['total'] for r in rs]))}"
                          if rs else "Fehler")
         print(f"| {vid} {label} | " + " | ".join(cells) + " |")
+
+    print("\n## Was Streaming spart (Median über alle Texte)\n")
+    print("| Variante | mit Streaming | ohne Streaming | gespart |")
+    print("|---|---:|---:|---:|")
+    for vid, label, *_ in variants:
+        rs = [r for sn, _, _ in SAMPLES for r in ok(vid, sn) if r["ttft"] is not None]
+        if not rs:
+            print(f"| {vid} {label} | – | – | – |")
+            continue
+        ttft, total = median([r["ttft"] for r in rs]), median([r["total"] for r in rs])
+        saved = median([r["total"] - r["ttft"] for r in rs])
+        print(f"| {vid} {label} | {s(ttft)} | {s(total)} | {s(saved)} |")
 
     print("\n## Qualität und Kosten (über alle Texte)\n")
     print("| Variante | Fakten | Format ok | Reasoning-Tokens | Kosten/Zusammenf. | Anbieter | ok |")
@@ -353,7 +375,8 @@ def main():
         )
     print(f"\nGesamtkosten dieses Laufs: {total_cost * 100:.2f} ct")
 
-    # Alles zum Gegenlesen: pro Text die erste gelungene Zusammenfassung jeder Variante.
+    # Alles zum Gegenlesen: pro Text jede gelungene Zusammenfassung jeder Variante - auch die
+    # Ausreisser, die einen schlechten Qualitaetswert erklaeren.
     with open(args.out, "w", encoding="utf-8") as f:
         f.write("# Zusammenfassungen zum Vergleich\n\n")
         for sample_name, segments, facts in SAMPLES:
@@ -364,11 +387,12 @@ def main():
                 if not rs:
                     f.write(f"### {vid} {label}\n\n(keine Antwort)\n\n")
                     continue
-                score, missing = fact_score(rs[0]["text"], facts)
                 f.write(f"### {vid} {label}\n\n")
-                f.write(f"Fakten {100 * score:.0f} %"
-                        + (f" – fehlt: {', '.join(missing)}" if missing else "")
-                        + f" · via {rs[0]['provider']}\n\n{rs[0]['text']}\n\n")
+                for i, r in enumerate(rs, 1):
+                    score, missing = fact_score(r["text"], facts)
+                    f.write(f"**Lauf {i}** · Fakten {100 * score:.0f} %"
+                            + (f" – fehlt: {', '.join(missing)}" if missing else "")
+                            + f" · {s(r['ttft'])} / {s(r['total'])} · via {r['provider']}\n\n{r['text']}\n\n")
     print(f"Alle Zusammenfassungen: {args.out}")
 
 

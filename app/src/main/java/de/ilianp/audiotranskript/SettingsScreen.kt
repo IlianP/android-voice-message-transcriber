@@ -70,6 +70,7 @@ fun SettingsScreen(
     onLangSelect: (String) -> Unit,
     limits: HistoryLimits,
     onClearHistory: () -> Unit,
+    closeRequest: Int = 0,
     onClose: (HistoryLimits) -> Unit,
 ) {
     var maxEntries by rememberSaveable { mutableIntStateOf(limits.maxEntries) }
@@ -77,6 +78,11 @@ fun SettingsScreen(
     val draft = HistoryLimits(maxEntries, maxAgeDays)
     val close = { onClose(draft) }
     BackHandler(onBack = close)
+    // A change of [closeRequest] after opening closes the screen as Back would (a new share).
+    val openedWith = remember { closeRequest }
+    LaunchedEffect(closeRequest) {
+        if (closeRequest != openedWith) close()
+    }
 
     // Looked up off the main thread: both walk the history directory.
     var storageBytes by remember { mutableLongStateOf(0L) }

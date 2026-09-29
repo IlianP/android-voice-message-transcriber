@@ -186,6 +186,8 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     var langCode by remember { mutableStateOf(settings.languageCode) }
     // A screen of its own, swapped in for this one - see [SettingsScreen].
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    // Raised to have the settings close themselves - see the share effect below.
+    var settingsCloseRequest by remember { mutableIntStateOf(0) }
     // Hoisted, so a trip to the settings does not throw the transcript back to its top.
     val scrollState = rememberScrollState()
 
@@ -382,6 +384,10 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     LaunchedEffect(sharedUris, shareDeliveryId) {
         if (sharedUris.isNotEmpty() && shareDeliveryId != handledDelivery) {
             handledDelivery = shareDeliveryId
+            // A share arriving while the settings are open would otherwise run hidden behind
+            // them. Asked rather than dropped, so the screen applies its history limits the same
+            // way Back does instead of losing them.
+            if (settingsOpen) settingsCloseRequest++
             takeOver(sharedUris, withQueue = false)
         }
     }
@@ -458,6 +464,7 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                 historyExpanded = false
                 dropIfGone(entries)
             },
+            closeRequest = settingsCloseRequest,
             onClose = { closeSettings(it) },
         )
         return

@@ -118,6 +118,7 @@ class ScreenshotTest {
             openRouterApiKey = ""
             groqApiKey = ""
             sonioxApiKey = ""
+            historyLimits = HistoryLimits()
         }
     }
 
@@ -356,6 +357,39 @@ class ScreenshotTest {
                 .fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithText("Zweiter Durchlauf", substring = true).assertExists()
+    }
+
+    @Test
+    fun `a share arriving while the settings are open closes them and keeps their changes`() {
+        val uri = Uri.fromFile(audioFile)
+        ShadowMediaPlayer.addMediaInfo(
+            DataSource.toDataSource(context, uri),
+            ShadowMediaPlayer.MediaInfo(225_000, 0),
+        )
+        val delivery = mutableIntStateOf(0)
+        composeRule.setContent {
+            AppScreen(
+                sharedUris = if (delivery.intValue == 0) emptyList() else listOf(uri),
+                shareDeliveryId = delivery.intValue,
+            )
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Einstellungen").performClick()
+        composeRule.onNodeWithContentDescription("Einträge behalten: weniger").performClick()
+        composeRule.waitForIdle()
+
+        // What onNewIntent does when another message is shared into the open app.
+        delivery.intValue = 1
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodes(hasText("Donnerstag", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onAllNodesWithText("Einträge behalten").assertCountEquals(0)
+        assertTrue(
+            "Verlaufs-Grenze beim Schließen verloren",
+            Settings(context).historyLimits.maxEntries == 5,
+        )
     }
 
     @Test
