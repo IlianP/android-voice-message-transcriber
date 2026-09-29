@@ -3,17 +3,16 @@
 Einmalige Mess- und Vergleichsreihe fuer die Zusammenfassung - kein Teil der App, kein Teil der Tests.
 
 Vergleicht den Request, den SummaryClient.kt heute schickt, mit Varianten ohne Reasoning, mit
-anderem Routing und mit anderen guenstigen Modellen - an Beispieltexten verschiedener Laenge. Pro
-Anfrage wird gemessen:
+anderem Routing und mit anderen guenstigen Modellen - an Beispieltexten verschiedener Laenge.
 
-  * TTFT      - Zeit bis zum ersten sichtbaren Zeichen = so frueh zeigt eine App MIT Streaming
-                den ersten Stichpunkt an
-  * Gesamt    - Zeit bis die Antwort komplett ist = so lange wartet eine App OHNE Streaming,
-                also die App heute, bevor sie ueberhaupt etwas anzeigt
+Jede Variante wird zweimal geschickt: einmal MIT Streaming (so koennte die App es kuenftig machen)
+und einmal OHNE Streaming (so macht es die App heute: sie wartet auf die komplette Antwort). So
+lassen sich Wartezeit und Kosten beider Wege direkt gegenueberstellen. Gemessen wird:
 
-Gemessen wird immer gestreamt; die Antwort ohne Streaming ist dieselbe, nur am Stueck geliefert.
-Die Differenz beider Zeiten ist also genau das, was Streaming an Wartezeit spart.
-  * Kosten    - was OpenRouter fuer die Anfrage berechnet (usage.cost)
+  * TTFT      - mit Streaming: Zeit bis zum ersten sichtbaren Zeichen, ab da liest man
+  * Gesamt    - mit Streaming: Zeit bis die Antwort komplett ist
+  * ohne Str. - ohne Streaming: Zeit bis die Antwort da ist - vorher sieht man nichts
+  * Kosten    - was OpenRouter fuer die Anfrage berechnet (usage.cost), fuer beide Wege
   * Fakten    - wie viele der vorher festgelegten Kernaussagen des Textes in der Zusammenfassung
                 stehen (Schluesselwort-Pruefung, grob, aber fuer alle Varianten gleich)
   * Format    - 3 bis 6 Zeilen, jede beginnend mit "• ", wie der Prompt verlangt
@@ -27,7 +26,8 @@ Aufruf (nur Standardbibliothek, kein pip):
 
 Alle Varianten schicken wie die App `data_collection: deny` + `zdr: true`; gemessen wird also nur,
 was datenschutzseitig ueberhaupt in Frage kommt. Die Texte sind erfunden, keine echten
-Sprachnachrichten. Kosten eines kompletten Laufs mit --runs 3: grob 1-3 Cent.
+Sprachnachrichten. Kosten eines kompletten Laufs mit --runs 3: grob 2-6 Cent (mit --no-plain, also
+ohne die Vergleichsaufrufe ohne Streaming, etwa die Haelfte).
 """
 
 import argparse
@@ -221,6 +221,35 @@ def body_for(model, reasoning, provider_extra, segments):
 
 # ---- Messung ---------------------------------------------------------------------------------
 
+def measure_plain(key, body, timeout=120):
+    """Derselbe Request ohne Streaming, wie die App ihn heute schickt: eine Antwort am Stueck."""
+    body = dict(body, stream=False)
+    req = urllib.request.Request(URL, data=json.dumps(body).encode(), method="POST", headers={
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    })
+    t0 = time.perf_counter()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:200]}"}
+    except Exception as e:  # Netzwerk, Timeout, kaputtes JSON
+        return {"error": f"{type(e).__name__}: {e}"}
+    total = time.perf_counter() - t0
+    # OpenRouter meldet auch Fehler beim Anbieter mit HTTP 200 und einem error-Objekt.
+    if "error" in data:
+        return {"error": json.dumps(data["error"], ensure_ascii=False)[:200]}
+    usage = data.get("usage") or {}
+    text = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+    return {
+        "total": total,
+        "provider": data.get("provider") or "-",
+        "cost": usage.get("cost"),
+        "text": text,
+    }
+
+
 def measure(key, body, timeout=120):
     """Ein gestreamter Request. Zeiten in Sekunden, oder {'error': ...}."""
     req = urllib.request.Request(URL, data=json.dumps(body).encode(), method="POST", headers={
@@ -297,6 +326,8 @@ def main():
     ap.add_argument("--runs", type=int, default=3, help="Durchläufe pro Variante und Text (Median wird berichtet)")
     ap.add_argument("--only", help="nur Varianten, deren Kennbuchstabe hier vorkommt, z. B. ABC")
     ap.add_argument("--out", default="zusammenfassungen.md", help="Datei für alle erzeugten Zusammenfassungen")
+    ap.add_argument("--no-plain", action="store_true",
+                    help="ohne die Vergleichsaufrufe ohne Streaming (halbe Kosten, kein Streaming-Vergleich)")
     args = ap.parse_args()
 
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -311,19 +342,32 @@ def main():
 
     # results[(variant, sample)] = [run, ...]. Reihum gemessen - Durchlauf, dann Text, dann
     # Variante -, damit eine langsame Minute bei OpenRouter nicht nur eine Variante trifft.
-    results = {}
+    # plain[...] genauso, fuer dieselben Requests ohne Streaming - direkt nach dem gestreamten,
+    # damit beide moeglichst dieselbe Lage bei OpenRouter erwischen.
+    results, plain = {}, {}
     for run in range(args.runs):
         for sample_name, segments, _ in SAMPLES:
             for vid, _, model, reasoning, extra in variants:
-                r = measure(key, body_for(model, reasoning, extra, segments))
+                body = body_for(model, reasoning, extra, segments)
+                r = measure(key, body)
                 results.setdefault((vid, sample_name), []).append(r)
                 status = r.get("error") or (
                     f"TTFT {s(r['ttft'])}  gesamt {s(r['total'])}  via {r['provider']}"
                     f"  reasoning={r['reasoning_tokens']}"
                 )
+                if not args.no_plain:
+                    p = measure_plain(key, body)
+                    plain.setdefault((vid, sample_name), []).append(p)
+                    status += "  |  ohne Streaming: " + (p.get("error") or f"{s(p['total'])} via {p['provider']}")
                 print(f"#{run + 1} {vid} {sample_name:18} {status}", flush=True)
 
     ok = lambda vid, sample: [r for r in results.get((vid, sample), []) if "error" not in r]
+    ok_plain = lambda vid, sample: [r for r in plain.get((vid, sample), []) if "error" not in r]
+
+    def waited_without_streaming(vid, sample):
+        """Echter Aufruf ohne Streaming, wenn gemessen; sonst das Ende der gestreamten Antwort."""
+        rs = ok_plain(vid, sample) or ok(vid, sample)
+        return median([r["total"] for r in rs])
 
     print("\n## Geschwindigkeit (Median)\n")
     print("Je Zelle: **mit Streaming** sichtbar ab / **ohne Streaming** (App heute) sichtbar ab. "
@@ -335,23 +379,31 @@ def main():
         cells = []
         for sample_name, _, _ in SAMPLES:
             rs = ok(vid, sample_name)
-            cells.append(f"{s(median([r['ttft'] for r in rs]))} / {s(median([r['total'] for r in rs]))}"
+            cells.append(f"{s(median([r['ttft'] for r in rs]))} / {s(waited_without_streaming(vid, sample_name))}"
                          if rs else "Fehler")
         print(f"| {vid} {label} | " + " | ".join(cells) + " |")
 
-    print("\n## Was Streaming spart (Median über alle Texte)\n")
-    print("| Variante | mit Streaming | ohne Streaming | gespart |")
-    print("|---|---:|---:|---:|")
+    print("\n## Streaming gegen ohne Streaming (Median über alle Texte)\n")
+    print("„Lesbar ab“ ist, wann auf dem Bildschirm Text steht: mit Streaming beim ersten Zeichen, "
+          "ohne Streaming erst, wenn alles fertig ist. Beide Wege werden pro Token abgerechnet; "
+          "die Kostenspalten zeigen, ob sich das in der Praxis bestätigt.\n")
+    print("| Variante | mit Str.: lesbar ab | mit Str.: komplett | ohne Str.: lesbar ab | früher lesbar "
+          "| Kosten mit Str. | Kosten ohne Str. |")
+    print("|---|---:|---:|---:|---:|---:|---:|")
     for vid, label, *_ in variants:
         rs = [r for sn, _, _ in SAMPLES for r in ok(vid, sn) if r["ttft"] is not None]
+        ps = [r for sn, _, _ in SAMPLES for r in ok_plain(vid, sn)]
         if not rs:
-            print(f"| {vid} {label} | – | – | – |")
+            print(f"| {vid} {label} | – | – | – | – | – | – |")
             continue
         ttft, total = median([r["ttft"] for r in rs]), median([r["total"] for r in rs])
-        saved = median([r["total"] - r["ttft"] for r in rs])
-        print(f"| {vid} {label} | {s(ttft)} | {s(total)} | {s(saved)} |")
+        waited = median([r["total"] for r in ps]) if ps else None
+        earlier = s(waited - ttft) if waited is not None else "–"
+        ct = lambda xs: (lambda c: "–" if c is None else f"{c * 100:.3f} ct")(median([r["cost"] for r in xs]))
+        print(f"| {vid} {label} | {s(ttft)} | {s(total)} | {s(waited)} | {earlier} "
+              f"| {ct(rs)} | {ct(ps) if ps else '–'} |")
 
-    print("\n## Qualität und Kosten (über alle Texte)\n")
+    print("\n## Qualität und Kosten (über alle Texte, gestreamte Aufrufe)\n")
     print("| Variante | Fakten | Format ok | Reasoning-Tokens | Kosten/Zusammenf. | Anbieter | ok |")
     print("|---|---:|---:|---:|---:|---|---:|")
     total_cost = 0.0
@@ -364,6 +416,7 @@ def main():
         n_all = sum(len(results.get((vid, sn), [])) for sn, _, _ in SAMPLES)
         costs = [r["cost"] for r in rs if r["cost"] is not None]
         total_cost += sum(costs)
+        total_cost += sum(r["cost"] for sn, _, _ in SAMPLES for r in ok_plain(vid, sn) if r["cost"] is not None)
         providers = ", ".join(sorted({r["provider"] for r in rs})) or "–"
         facts = f"{100 * statistics.mean(scores):.0f} %" if scores else "–"
         fmt = f"{100 * sum(format_ok(r['text']) for r in rs) / len(rs):.0f} %" if rs else "–"

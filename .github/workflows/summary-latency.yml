@@ -2,7 +2,8 @@ name: Zusammenfassung – Latenz- und Qualitätsvergleich
 
 # Einmalige Messung, nur von Hand ueber "Run workflow" - laeuft bei keinem PR und keinem
 # Release mit. Vergleicht die Zusammenfassung (SummaryClient.kt) mit Varianten ohne Reasoning,
-# anderem Routing und anderen guenstigen Modellen, an Texten verschiedener Laenge. Die Tabellen
+# anderem Routing und anderen guenstigen Modellen, an Texten verschiedener Laenge - jeweils mit
+# und ohne Streaming, damit Wartezeit und Kosten beider Wege direkt vergleichbar sind. Die Tabellen
 # stehen in der Zusammenfassung des Laufs, alle erzeugten Texte haengen als Artefakt dran.
 #
 # Braucht das Repository-Secret OPENROUTER_API_KEY. Liegt unter .github/, loest also
