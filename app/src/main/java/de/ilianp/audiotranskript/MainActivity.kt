@@ -64,6 +64,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -691,12 +692,10 @@ private fun TranscriptionPanel(
                                 enabled = hasAudio,
                                 onClick = { onPlaySegment(index) },
                             )
-                            SelectionContainer { Text(text) }
+                            TranscriptText(text)
                         }
                     } else {
-                        SelectionContainer {
-                            Text(result)
-                        }
+                        TranscriptText(result)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = onCopy) { Text("Kopieren") }
@@ -713,6 +712,20 @@ private fun TranscriptionPanel(
                 }
             }
         }
+    }
+}
+
+/** One transcript text; an empty one (no speech in the audio) says so instead of showing nothing. */
+@Composable
+private fun TranscriptText(text: String) {
+    if (text.isBlank()) {
+        Text(
+            "Keine Sprache erkannt.",
+            fontStyle = FontStyle.Italic,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        SelectionContainer { Text(text) }
     }
 }
 
