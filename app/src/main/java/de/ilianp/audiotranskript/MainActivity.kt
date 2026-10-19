@@ -201,6 +201,9 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
     var result by rememberSaveable { mutableStateOf<String?>(null) }
     // One transcript per message of the batch; [result] is these joined.
     var segments by rememberSaveable(stateSaver = StringListSaver) { mutableStateOf(emptyList()) }
+    // Copied or shared, a batch keeps its numbering, so the reader can tell the messages apart.
+    fun shareableTranscript(): String? =
+        if (segments.size > 1) WizperClient.numberedTranscripts(segments) else result
     var doneCount by remember { mutableIntStateOf(0) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
     var elapsedSeconds by remember { mutableIntStateOf(0) }
@@ -600,8 +603,8 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                         hasAudio = uris.isNotEmpty(),
                         onStart = { startTranscription(uris) },
                         onCancel = { job?.cancel(); running = false },
-                        onCopy = { result?.let { copyText(context, clipboard, it) } },
-                        onShare = { result?.let { shareText(context, it) } },
+                        onCopy = { shareableTranscript()?.let { copyText(context, clipboard, it) } },
+                        onShare = { shareableTranscript()?.let { shareText(context, it) } },
                     )
                 } else {
                     Spacer(Modifier.height(8.dp))

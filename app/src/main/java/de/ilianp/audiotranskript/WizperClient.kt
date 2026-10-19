@@ -134,6 +134,14 @@ object WizperClient {
     /** Joins a batch's transcripts into the one text that is copied or shared. */
     fun joinTranscripts(texts: List<String>): String = texts.joinToString("\n\n")
 
+    /** A single message as it is; a batch with its messages numbered, like on screen. */
+    fun numberedTranscripts(texts: List<String>): String =
+        if (texts.size == 1) {
+            texts.single()
+        } else {
+            texts.mapIndexed { i, s -> "Nachricht ${i + 1}:\n$s" }.joinToString("\n\n")
+        }
+
     /** How many messages of a batch are sent to a provider at the same time. */
     private const val MAX_PARALLEL = 3
 

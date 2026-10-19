@@ -181,13 +181,6 @@ object SummaryClient {
             .ifBlank { throw WizperException("Keine Zusammenfassung erhalten") }
     }
 
-    /** A single message as it is; a batch with its messages numbered, like on screen. */
-    internal fun userMessage(segments: List<String>): String {
-        val text = if (segments.size == 1) {
-            segments.single()
-        } else {
-            segments.mapIndexed { i, s -> "Nachricht ${i + 1}:\n$s" }.joinToString("\n\n")
-        }
-        return "Transkript:\n<<<\n$text\n>>>"
-    }
+    internal fun userMessage(segments: List<String>): String =
+        "Transkript:\n<<<\n${WizperClient.numberedTranscripts(segments)}\n>>>"
 }

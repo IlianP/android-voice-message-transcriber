@@ -139,7 +139,8 @@ oben) nimmt mehrere Dateien.
 
 **Transkription:** ein Request pro Nachricht (höchstens drei gleichzeitig), kein Zusammenschneiden
 von Audio. Das Ergebnis ist *ein* Transkript: auf dem Bildschirm mit einer Überschrift „Nachricht
-1 / 2 / 3" vor jedem Teil, beim Kopieren/Teilen als durchgehender Text mit Leerzeilen dazwischen.
+1 / 2 / 3" vor jedem Teil, beim Kopieren/Teilen ebenso nummeriert („Nachricht 1:" …), damit
+man auch beim Empfänger sieht, wo eine Nachricht endet.
 Scheitert eine Nachricht, meldet der Fehler, welche („Nachricht 2 von 3: …").
 
 **Wiedergabe:** die Player-Leiste läuft **durchgehend** vom Anfang der ersten bis zum Ende der
