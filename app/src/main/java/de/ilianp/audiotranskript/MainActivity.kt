@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -58,6 +59,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
@@ -578,7 +580,7 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                                 summaryDraft = null
                                 summaryRequested = false
                             },
-                            onCopy = { summary?.let { clipboard.setText(AnnotatedString(it)) } },
+                            onCopy = { summary?.let { copyText(context, clipboard, it) } },
                             onShare = { summary?.let { shareText(context, it, "Zusammenfassung teilen") } },
                         )
                     }
@@ -597,7 +599,7 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                         hasAudio = uris.isNotEmpty(),
                         onStart = { startTranscription(uris) },
                         onCancel = { job?.cancel(); running = false },
-                        onCopy = { result?.let { clipboard.setText(AnnotatedString(it)) } },
+                        onCopy = { result?.let { copyText(context, clipboard, it) } },
                         onShare = { result?.let { shareText(context, it) } },
                     )
                 } else {
@@ -613,7 +615,7 @@ fun AppScreen(sharedUris: List<Uri>, shareDeliveryId: Int = 0) {
                     Spacer(Modifier.height(8.dp))
                     DebugPanel(
                         log = debugLog,
-                        onCopy = { clipboard.setText(AnnotatedString(debugLog)) },
+                        onCopy = { copyText(context, clipboard, debugLog) },
                         onClear = { DebugLog.clear(context); debugLog = "" },
                     )
                 }
@@ -1129,6 +1131,14 @@ private fun DebugPanel(
                 )
             }
         }
+    }
+}
+
+/** Copies [text]; below Android 13 with a toast, from 13 on the system confirms it itself. */
+private fun copyText(context: Context, clipboard: ClipboardManager, text: String) {
+    clipboard.setText(AnnotatedString(text))
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        Toast.makeText(context, "In die Zwischenablage kopiert", Toast.LENGTH_SHORT).show()
     }
 }
 
