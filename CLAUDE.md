@@ -163,10 +163,11 @@ Fingerabdruck-Abgleich gegen den oben hinterlegten Wert, sowie versionCode
 die konfigurierten Transkriptions-Provider erreichbar sind — das wurde hier
 ursprünglich fälschlich behauptet und war nie Teil des Skills.
 
-## Cloud-Umgebung beschleunigen (optional, noch nicht eingerichtet)
+## Cloud-Umgebung beschleunigen (optional)
 
-Ein Setup-Script in der Cloud-Umgebung (claude.ai/code → Zahnrad bei der
-Umgebung → „Setup script") könnte das Android SDK einmalig installieren und
-danach cachen, statt es in jeder Session neu herunterzuladen (~7 Minuten
-Ersparnis pro Session). Noch nicht umgesetzt, weil das nur über die
-claude.ai-Oberfläche geht, nicht aus einer Session heraus.
+`.github/scripts/cloud-setup.sh` installiert das Android SDK nach `/opt/android-sdk` (~20 s statt
+~7 min Handarbeit). Wirkt nur, wenn sein Inhalt in der Cloud-Umgebung als Setup-Script eingetragen
+ist (claude.ai/code → Umgebung → Bearbeiten → „Setup script“) – das geht nur über die Oberfläche,
+nicht aus einer Session heraus. Ist `ANDROID_HOME` in der Shell trotzdem leer:
+`echo sdk.dir=/opt/android-sdk > local.properties`. Maven Central antwortet in Cloud-Sessions
+gelegentlich mit 429; dann `./gradlew` einfach erneut starten, bereits Geladenes bleibt im Cache.
