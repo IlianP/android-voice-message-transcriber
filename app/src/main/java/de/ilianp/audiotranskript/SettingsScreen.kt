@@ -196,6 +196,14 @@ fun SettingsScreen(
             OutlinedButton(onClick = { confirmClear = true }, enabled = storedCount > 0) {
                 Text("Verlauf löschen")
             }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            // Which release is installed, to compare with GitHub; local builds say "1.0-dev".
+            Text(
+                "Version ${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 

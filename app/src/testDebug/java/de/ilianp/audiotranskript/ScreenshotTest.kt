@@ -163,6 +163,7 @@ class ScreenshotTest {
         composeRule.onNodeWithText("Einträge behalten").assertExists()
         composeRule.onNodeWithText("Aufbewahren").assertExists()
         composeRule.onNodeWithText("7 Tage").assertExists()
+        composeRule.onNodeWithText("Version ${BuildConfig.VERSION_NAME}").assertExists()
 
         // Saved as typed: there is no save button any more to forget.
         composeRule.onNodeWithText("Groq API-Key (Fallback, optional)").performTextInput("gsk-neu")

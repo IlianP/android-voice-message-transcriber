@@ -54,7 +54,7 @@ entsprechend sortiert:
    kein Key gesetzt ist, steht darunter eine Karte „Einstellungen öffnen".
 2. **Einstellungen** (`SettingsScreen.kt`) – ein eigener Bildschirm hinter dem Zahnrad, statt einer
    aufklappbaren Zeile: API-Keys, Sprache, Verlaufs-Grenzen (Anzahl, Tage), belegter Speicher und
-   „Verlauf löschen". Keys und Sprache werden beim Tippen gespeichert. Die Verlaufs-Grenzen gelten
+   „Verlauf löschen", ganz unten die installierte Version. Keys und Sprache werden beim Tippen gespeichert. Die Verlaufs-Grenzen gelten
    erst beim Verlassen – vorher zeigt der Bildschirm, wie viele Einträge dadurch wegfallen würden,
    und das Durchklicken der Stufen löscht nichts auf dem Weg.
 3. **Zusammenfassung** – direkt über dem Transkript, nur mit OpenRouter-Key: als Angebot, als
