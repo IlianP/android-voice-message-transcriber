@@ -355,19 +355,22 @@ damit Tests sie umbiegen können.
 
 ## Einrichtung
 
-Beim ersten Start über „Einstellungen öffnen" (oder das Zahnrad oben rechts) einen
-**OpenRouter-API-Key** eintragen, optional Groq und Soniox als Fallback – gespeichert wird
-beim Tippen. Danach eine Sprachnachricht aus einer anderen
-App mit „Audio-Transkript" teilen.
+Beim ersten Start über „Einstellungen öffnen" (oder das Zahnrad oben rechts) einen API-Key
+eintragen – gespeichert wird beim Tippen. Danach eine Sprachnachricht aus einer anderen App mit
+„Audio-Transkript" teilen.
+
+Welcher Anbieter, was er kostet und wie man den Key Schritt für Schritt anlegt, steht in der
+**[Anleitung: eigenen API-Key anlegen](docs/anleitung-api-keys.md)**. Kurzfassung: kostenlos
+geht es mit Groq, die beste Erkennung und die Zusammenfassung gibt es mit OpenRouter.
 
 Die Keys werden ausschließlich in der App eingegeben und verschlüsselt auf dem Gerät
 abgelegt – sie stehen an keiner Stelle im Code oder im Build.
 
 ## Datenschutz
 
-Die App hat keinen eigenen Server. Geteilte Audiodateien werden zur Transkription
-direkt an **Groq** und – falls als Fallback konfiguriert – an **Soniox** gesendet;
-dort gelten deren Datenschutzbestimmungen. Soniox-Uploads löscht die App direkt nach
+Die App hat keinen eigenen Server. Geteilte Audiodateien werden zur Transkription direkt an den
+ersten Anbieter gesendet, für den ein Key eingetragen ist – **OpenRouter** (MAI-Transcribe-2),
+sonst bzw. als Fallback **Groq**, zuletzt **Soniox**; dort gelten deren Datenschutzbestimmungen. Soniox-Uploads löscht die App direkt nach
 dem Abruf des Transkripts wieder, Reste werden beim nächsten App-Start abgeräumt.
 API-Keys und Einstellungen bleiben lokal auf dem Gerät. Es findet keine Analyse,
 kein Tracking und keine Übertragung an Dritte darüber hinaus statt.
@@ -385,3 +388,10 @@ der eingestellten Zeit automatisch gelöscht (Standard sieben Tage), spätestens
 eingestellte Anzahl überschritten ist (Standard zehn); langes Drücken löscht einen einzelnen
 Eintrag, „Verlauf löschen" in den Einstellungen räumt sofort alles weg. Vom Cloud-Backup und von der Geräteübertragung ist das
 Verzeichnis ausgenommen. Beim Deinstallieren verschwindet es mit den übrigen App-Daten.
+
+Ausführlicher, als Entwurf für den Play Store: [docs/datenschutz.md](docs/datenschutz.md).
+
+## Google Play (in Vorbereitung)
+
+Die Verteilung über Google Play ist vorbereitet, aber noch nicht umgesetzt. Checkliste, Technik,
+Store-Texte und offene Punkte: [docs/play-store/](docs/play-store/README.md).
