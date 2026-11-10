@@ -27,12 +27,12 @@ val buildVersionName = System.getenv("VERSION_NAME") ?: "1.0-dev"
 
 android {
     namespace = "de.ilianp.audiotranskript"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "de.ilianp.audiotranskript"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = buildVersionCode
         versionName = buildVersionName
     }

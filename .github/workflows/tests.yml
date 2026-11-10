@@ -41,7 +41,9 @@ jobs:
       # test deckt Debug- und Release-Unit-Tests ab, assembleDebug faengt
       # zusaetzlich Fehler in Manifest, Ressourcen und Packaging.
       - name: Tests und Debug-Build
-        run: ./gradlew --no-daemon test assembleDebug
+        # bundleRelease: prueft, dass sich das AAB fuer Google Play bauen laesst (ohne Keystore
+        # mit dem Debug-Key signiert, wird nicht veroeffentlicht).
+        run: ./gradlew --no-daemon test assembleDebug bundleRelease
 
       # Ohne das muesste man sich die fehlgeschlagene Zeile aus dem Log suchen.
       - name: Testberichte sichern
