@@ -247,7 +247,7 @@ demselben Schlüssel signiert und installieren sich als reguläres Update.
 ./gradlew testDebugUnitTest --tests '*ScreenshotTest*'   # Screenshots -> app/build/screenshots/
 ```
 
-- `minSdk` 26, `targetSdk`/`compileSdk` 35
+- `minSdk` 26, `targetSdk`/`compileSdk` 36 (Google-Play-Pflicht seit 31.08.2026)
 - Jetpack Compose (Material 3), OkHttp, Kotlin Coroutines
 - `versionCode`/`versionName` kommen aus den Umgebungsvariablen `VERSION_CODE`
   und `VERSION_NAME`; ohne sie baut Gradle als `1` / `1.0-dev`.
@@ -260,7 +260,9 @@ oder ein rotes Kreuz.
 
 `.github/workflows/release.yml` baut bei jedem Push auf `main` ein signiertes
 Release-APK und veröffentlicht es unter einem Tag `v1.0.<Lauf-Nummer>`. Die
-Release-Notes werden aus den Commits seit dem letzten Tag erzeugt. Der Workflow
+Release-Notes werden aus den Commits seit dem letzten Tag erzeugt. Derselbe Lauf baut zusätzlich ein
+AAB für Google Play und hängt es als Artefakt an den Workflow-Lauf, nicht ans Release (siehe
+[docs/play-store/02-technik.md](docs/play-store/02-technik.md)). Der Workflow
 lässt sich in den Actions auch manuell starten.
 
 ### Release-Signierung einrichten
