@@ -40,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -98,6 +99,8 @@ fun SettingsScreen(
         }
     }
 
+    val context = LocalContext.current
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -154,6 +157,11 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            // Ein Key genügt; wer noch keinen hat, braucht vor allem die Anleitung.
+            TextButton(onClick = { HelpLinks.open(context, HelpLinks.KEY_GUIDE) }) {
+                Text("Noch keinen Key? Anleitung: Key anlegen, Kosten")
+            }
+
             LanguageDropdown(selectedCode = langCode, onSelect = onLangSelect)
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -198,6 +206,9 @@ fun SettingsScreen(
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            TextButton(onClick = { HelpLinks.open(context, HelpLinks.PRIVACY) }) {
+                Text("Datenschutzerklärung")
+            }
             // Which release is installed, to compare with GitHub; local builds say "1.0-dev".
             Text(
                 "Version ${BuildConfig.VERSION_NAME}",

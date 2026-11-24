@@ -959,11 +959,17 @@ private fun MissingKeyCard(onOpenSettings: () -> Unit) {
         ) {
             Text("Noch kein API-Key eingetragen", style = MaterialTheme.typography.titleSmall)
             Text(
-                "Ohne Key kann nichts transkribiert werden. Die Keys stehen in den Einstellungen.",
+                "Ohne Key kann nichts transkribiert werden. Kostenlos geht es mit einem Groq-Key, die Anleitung zeigt Schritt für Schritt, wie.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(onClick = onOpenSettings) { Text("Einstellungen öffnen") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onOpenSettings) { Text("Einstellungen öffnen") }
+                val context = LocalContext.current
+                TextButton(onClick = { HelpLinks.open(context, HelpLinks.KEY_GUIDE) }) {
+                    Text("Anleitung")
+                }
+            }
         }
     }
 }

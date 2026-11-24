@@ -76,8 +76,11 @@ jobs:
           echo "name=$version_name"    >> "$GITHUB_OUTPUT"
           echo "tag=v$version_name"    >> "$GITHUB_OUTPUT"
           echo "apk=Audio-Transkript-$version_name.apk" >> "$GITHUB_OUTPUT"
+          echo "aab=Audio-Transkript-$version_name.aab" >> "$GITHUB_OUTPUT"
 
-      - name: Release-APK bauen
+      # Dasselbe Build fuer GitHub (APK) und Google Play (AAB): beide tragen damit denselben
+      # versionCode (= Lauf-Nummer). Play lehnt doppelte oder kleinere versionCodes ab.
+      - name: Release-APK und -AAB bauen
         env:
           KEYSTORE_FILE: ${{ runner.temp }}/release.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -85,7 +88,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: ${{ steps.version.outputs.name }}
-        run: ./gradlew --no-daemon assembleRelease
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
 
       - name: APK benennen
         run: |
@@ -101,6 +104,45 @@ jobs:
             --title "Audio-Transkript ${{ steps.version.outputs.name }}" \
             --generate-notes
 
+      # Erst nach dem GitHub-Release: ein Problem mit dem Play-Bundle darf die Verteilung ueber
+      # GitHub/Obtainium nicht aufhalten.
+      # Google Play nimmt das AAB mit dem Upload-Key entgegen und signiert die ausgelieferten
+      # APKs selbst - mit dem hochgeladenen Release-Key, damit Play- und GitHub-Installationen
+      # einander aktualisieren koennen (docs/play-store/02-technik.md). Sind keine Upload-Key-
+      # Secrets hinterlegt, bleibt das AAB mit dem Release-Key signiert.
+      - name: AAB mit Upload-Key signieren (optional)
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
+          UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.UPLOAD_KEYSTORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+        run: |
+          aab=app/build/outputs/bundle/release/app-release.aab
+          if [ -z "$UPLOAD_KEYSTORE_BASE64" ]; then
+            echo "::notice::Keine Upload-Key-Secrets - das AAB bleibt mit dem Release-Key signiert."
+            exit 0
+          fi
+          echo "$UPLOAD_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          # Alte Signatur entfernen, sonst traegt das Bundle zwei.
+          zip -q -d "$aab" 'META-INF/*.SF' 'META-INF/*.RSA' 'META-INF/*.EC' 'META-INF/*.MF' || true
+          jarsigner -keystore "$RUNNER_TEMP/upload.jks" \
+            -storepass:env UPLOAD_KEYSTORE_PASSWORD -keypass:env UPLOAD_KEY_PASSWORD \
+            -sigalg SHA256withRSA -digestalg SHA-256 "$aab" "$UPLOAD_KEY_ALIAS"
+          jarsigner -verify "$aab" > /dev/null
+
+      # Als Workflow-Artefakt, nicht als Release-Asset: Obtainium und Nutzer sollen auf der
+      # Release-Seite nur das installierbare APK finden.
+      - name: AAB fuer Google Play bereitstellen
+        run: |
+          cp app/build/outputs/bundle/release/app-release.aab "${{ steps.version.outputs.aab }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Audio-Transkript-${{ steps.version.outputs.name }}-aab
+          path: ${{ steps.version.outputs.aab }}
+          retention-days: 90
+          if-no-files-found: error
+
       - name: Keystore entfernen
         if: always()
-        run: rm -f "$RUNNER_TEMP/release.jks"
+        run: rm -f "$RUNNER_TEMP/release.jks" "$RUNNER_TEMP/upload.jks"

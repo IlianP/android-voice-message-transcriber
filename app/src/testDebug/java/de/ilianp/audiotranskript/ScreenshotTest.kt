@@ -133,6 +133,7 @@ class ScreenshotTest {
 
         capture("01-erststart-ohne-key")
         composeRule.onNodeWithText("Noch kein API-Key eingetragen").assertExists()
+        composeRule.onNodeWithText("Anleitung").assertExists()
 
         composeRule.onNodeWithText("Einstellungen öffnen").performClick()
         composeRule.waitForIdle()
@@ -164,6 +165,9 @@ class ScreenshotTest {
         composeRule.onNodeWithText("Aufbewahren").assertExists()
         composeRule.onNodeWithText("7 Tage").assertExists()
         composeRule.onNodeWithText("Version ${BuildConfig.VERSION_NAME}").assertExists()
+        // Play verlangt den Link zur Datenschutzerklärung in der App selbst.
+        composeRule.onNodeWithText("Datenschutzerklärung").assertExists()
+        composeRule.onNodeWithText("Noch keinen Key? Anleitung: Key anlegen, Kosten").assertExists()
 
         // Saved as typed: there is no save button any more to forget.
         composeRule.onNodeWithText("Groq API-Key (Fallback, optional)").performTextInput("gsk-neu")

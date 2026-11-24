@@ -5,7 +5,7 @@
 set -u
 
 SDK=/opt/android-sdk
-if [ ! -d "$SDK/platforms/android-35" ]; then
+if [ ! -d "$SDK/platforms/android-36" ]; then
   mkdir -p "$SDK/cmdline-tools" && cd /tmp \
     && curl -sSLo cmdline-tools.zip \
       https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
@@ -13,7 +13,7 @@ if [ ! -d "$SDK/platforms/android-35" ]; then
     && rm -rf "$SDK/cmdline-tools/latest" && mv cmdline-tools "$SDK/cmdline-tools/latest" \
     && rm cmdline-tools.zip \
     && yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
-      "platforms;android-35" "build-tools;34.0.0" "build-tools;35.0.0" "platform-tools" > /dev/null \
+      "platforms;android-35" "platforms;android-36" "build-tools;34.0.0" "build-tools;35.0.0" "platform-tools" > /dev/null \
     || echo "Android SDK konnte nicht installiert werden" >&2
 fi
 

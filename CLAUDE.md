@@ -163,6 +163,16 @@ Fingerabdruck-Abgleich gegen den oben hinterlegten Wert, sowie versionCode
 die konfigurierten Transkriptions-Provider erreichbar sind — das wurde hier
 ursprünglich fälschlich behauptet und war nie Teil des Skills.
 
+## Google Play (in Vorbereitung)
+
+Unterlagen und offene Punkte unter `docs/play-store/`. Für den Code wichtig: `targetSdk` 36 ist
+Play-Pflicht (AGP 8.5.2 baut es nur mit `android.suppressUnsupportedCompileSdk`; Robolectric
+läuft per `robolectric.properties` auf API 35). `release.yml` baut neben dem APK ein AAB aus
+**demselben Lauf** (gleicher versionCode = `run_number`, Workflow daher nie umbenennen) und
+hängt es als Artefakt an. Play soll mit dem **hochgeladenen Release-Key** signieren, damit Play-
+und GitHub-Installationen einander aktualisieren. Das AAB selbst signiert optional ein Upload-Key
+(`UPLOAD_*`-Secrets). Links zu Anleitung und Datenschutzerklärung in der App: `HelpLinks.kt`.
+
 ## Cloud-Umgebung beschleunigen (optional)
 
 `.github/scripts/cloud-setup.sh` installiert das Android SDK nach `/opt/android-sdk` (~20 s statt
